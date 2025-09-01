@@ -1,0 +1,995 @@
+import React, { useState, useEffect } from 'react'
+import { useParams, Link, useNavigate } from 'react-router-dom'
+import { Card } from '@/components/ui/Card'
+import { Button, IconButton } from '@/components/ui/Button'
+import { StatCard } from '@/components/ui/StatCard'
+import { CountryFlag } from '@/components/ui/CountryFlag'
+import { useScholarship, useUserFavorites, useAddToFavorites, useRemoveFromFavorites } from '@/hooks/useDatabase'
+import { useAuth } from '@/hooks/useAuth'
+import { supabase } from '@/lib/supabase'
+import {
+  ArrowLeft,
+  MapPin,
+  Globe,
+  Phone,
+  Mail,
+  Calendar,
+  Users,
+  BookOpen,
+  Award,
+  DollarSign,
+  Clock,
+  GraduationCap,
+  FileText,
+  CheckCircle,
+  XCircle,
+  Target,
+  AlertCircle,
+  ExternalLink,
+  Download,
+  User,
+  Heart,
+  Star
+} from 'lucide-react'
+
+interface Institution {
+  id: string;
+  name: string;
+  type: string;
+  country: string;
+  country_code: string;
+  city: string;
+  website?: string;
+  logo_url?: string;
+}
+
+interface AcademicProgram {
+  id: string;
+  name: string;
+  degree_type: string;
+  field_of_study: string;
+  duration_years: number;
+  language: string;
+}
+
+interface ScholarshipEligibility {
+  id: string;
+  criteria_type: string;
+  criteria_value: string;
+  min_value?: number;
+  max_value?: number;
+  unit?: string;
+  is_required: boolean;
+}
+
+export default function ScholarshipDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const { data: scholarship, isLoading } = useScholarship(id!)
+  const { data: userFavorites } = useUserFavorites(user?.id)
+  const addToFavorites = useAddToFavorites()
+  const removeFromFavorites = useRemoveFromFavorites()
+  
+  const [institution, setInstitution] = useState<Institution | null>(null)
+  const [academicProgram, setAcademicProgram] = useState<AcademicProgram | null>(null)
+  const [eligibilityCriteria, setEligibilityCriteria] = useState<ScholarshipEligibility[]>([])
+  const [relatedScholarships, setRelatedScholarships] = useState<any[]>([])
+
+  const isFavorite = userFavorites?.some(f => f.scholarship_id === id) || false
+
+  const handleToggleFavorite = () => {
+    if (!user || !id) return
+    
+    if (isFavorite) {
+      removeFromFavorites.mutate({ userId: user.id, scholarshipId: id })
+    } else {
+      addToFavorites.mutate({ userId: user.id, scholarshipId: id })
+    }
+  }
+  
+  // Charger les données supplémentaires
+  useEffect(() => {
+    const fetchAdditionalData = async () => {
+      if (!scholarship) return;
+      
+      try {
+        // Incrémenter le compteur de vues
+        await supabase
+          .from('scholarships')
+          .update({ view_count: (scholarship.view_count || 0) + 1 })
+          .eq('id', id!);
+
+        // Charger l'institution
+        if (scholarship.institution_id) {
+          const { data: institutionData } = await supabase
+            .from('institutions')
+            .select('*')
+            .eq('id', scholarship.institution_id)
+            .single();
+          
+          if (institutionData) setInstitution(institutionData);
+        }
+
+        // Charger le programme académique
+        if (scholarship.academic_program_id) {
+          const { data: programData } = await supabase
+            .from('academic_programs')
+            .select('*')
+            .eq('id', scholarship.academic_program_id)
+            .single();
+          
+          if (programData) setAcademicProgram(programData);
+        }
+
+        // Charger les critères d'éligibilité
+        const { data: eligibilityData } = await supabase
+          .from('scholarship_eligibility')
+          .select('*')
+          .eq('scholarship_id', id!)
+          .order('is_required', { ascending: false });
+        
+        if (eligibilityData) setEligibilityCriteria(eligibilityData);
+
+        // Charger les bourses similaires
+        const { data: relatedData } = await supabase
+          .from('scholarships')
+          .select('*')
+          .neq('id', id!)
+          .eq('institution_id', scholarship.institution_id)
+          .eq('is_active', true)
+          .limit(3);
+        
+        if (relatedData) setRelatedScholarships(relatedData);
+        
+      } catch (error) {
+        console.error('Erreur lors du chargement des données supplémentaires:', error);
+      }
+    };
+
+    fetchAdditionalData();
+  }, [scholarship, id]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
+      </div>
+    )
+  }
+
+  if (!scholarship) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Erreur</h1>
+          <p className="text-gray-600 mb-6">Bourse introuvable</p>
+          <Link to="/scholarships">
+            <Button variant="primary" icon={ArrowLeft}>
+              Retour aux bourses
+            </Button>
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
+  // Calculer le statut de la bourse
+  const getScholarshipStatus = () => {
+    if (!scholarship.is_active) {
+      return { status: 'inactive', label: 'Inactive', color: 'red' };
+    }
+    
+    if (scholarship.application_deadline) {
+      const deadline = new Date(scholarship.application_deadline);
+      const now = new Date();
+      const daysUntilDeadline = Math.ceil((deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (daysUntilDeadline < 0) {
+        return { status: 'expired', label: 'Expirée', color: 'red', daysUntilDeadline };
+      } else if (daysUntilDeadline <= 7) {
+        return { status: 'urgent', label: 'Urgent', color: 'amber', daysUntilDeadline };
+      } else if (daysUntilDeadline <= 30) {
+        return { status: 'soon', label: 'Bientôt', color: 'orange', daysUntilDeadline };
+      }
+    }
+    
+    return { status: 'active', label: 'Active', color: 'green' };
+  };
+
+  const scholarshipStatus = getScholarshipStatus();
+  const isExpired = scholarshipStatus.status === 'expired';
+  const isExpiringSoon = scholarshipStatus.status === 'urgent' || scholarshipStatus.status === 'soon';
+  const daysUntilDeadline = scholarshipStatus.daysUntilDeadline || 0;
+
+  // Calculer les statistiques
+  const stats = {
+    amount: scholarship.amount_usd || scholarship.amount_local || 0,
+    currency: scholarship.currency || 'USD',
+    duration: scholarship.duration_months || 0,
+    coverage: scholarship.coverage_percentage || 0,
+    views: scholarship.view_count || 0,
+    applications: scholarship.application_count || 0
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* En-tête de navigation */}
+      <div className="bg-white border-b">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => navigate(-1)}
+              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              <ArrowLeft className="h-5 w-5" />
+              <span>Retour</span>
+            </button>
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Link to="/" className="hover:text-blue-600">Accueil</Link>
+              <span>/</span>
+              <Link to="/scholarships" className="hover:text-blue-600">Bourses</Link>
+              <span>/</span>
+              <span className="text-gray-900 font-medium truncate max-w-xs">{scholarship.title}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* En-tête de la bourse */}
+      <div className="bg-white border-b">
+        <div className="container mx-auto px-4 py-8">
+          <div className="flex flex-col lg:flex-row items-start gap-6">
+            <div className="flex-shrink-0">
+              {institution?.country_code && (
+                <CountryFlag countryCode={institution.country_code} size={80} className="rounded-lg shadow-lg" />
+              )}
+            </div>
+            
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start gap-3 mb-3">
+                    <h1 className="text-3xl font-bold text-gray-900 leading-tight">{scholarship.title}</h1>
+                    <span className={`flex-shrink-0 px-3 py-1 rounded-full text-sm font-medium ${
+                      scholarshipStatus.color === 'green' ? 'bg-green-100 text-green-800' :
+                      scholarshipStatus.color === 'amber' ? 'bg-amber-100 text-amber-800' :
+                      scholarshipStatus.color === 'orange' ? 'bg-orange-100 text-orange-800' :
+                      scholarshipStatus.color === 'red' ? 'bg-red-100 text-red-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {scholarshipStatus.label}
+                    </span>
+                  </div>
+                  
+                  {institution && (
+                    <Link 
+                      to={`/institution/${institution.id}`}
+                      className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 font-semibold mb-2"
+                    >
+                      <span>{institution.name}</span>
+                      <ExternalLink className="h-4 w-4" />
+                    </Link>
+                  )}
+                  
+                  <div className="flex flex-wrap items-center gap-4 text-gray-600 mb-4">
+                    {institution && (
+                      <div className="flex items-center gap-1">
+                        <MapPin className="h-4 w-4" />
+                        <span>{institution.city}, {institution.country}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1">
+                      <GraduationCap className="h-4 w-4" />
+                      <span>{scholarship.scholarship_type}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <DollarSign className="h-4 w-4" />
+                      <span>{scholarship.funding_type}</span>
+                    </div>
+                    {scholarship.application_deadline && (
+                      <div className="flex items-center gap-1">
+                        <Clock className="h-4 w-4" />
+                        <span>Échéance: {new Date(scholarship.application_deadline).toLocaleDateString('fr-FR')}</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex flex-wrap gap-4">
+                    {scholarship.contact_email && (
+                      <a href={`mailto:${scholarship.contact_email}`} className="flex items-center gap-1 text-blue-600 hover:text-blue-800">
+                        <Mail className="h-4 w-4" />
+                        <span>Contact</span>
+                      </a>
+                    )}
+                    {scholarship.contact_phone && (
+                      <a href={`tel:${scholarship.contact_phone}`} className="flex items-center gap-1 text-blue-600 hover:text-blue-800">
+                        <Phone className="h-4 w-4" />
+                        <span>Téléphone</span>
+                      </a>
+                    )}
+                    {scholarship.website_url && (
+                      <a href={scholarship.website_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-600 hover:text-blue-800">
+                        <Globe className="h-4 w-4" />
+                        <span>Site web</span>
+                      </a>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex flex-col gap-3 lg:text-right">
+                  <div className="text-3xl font-bold text-blue-600">
+                    {stats.amount > 0 ? `${stats.amount.toLocaleString()} ${stats.currency}` : 'Montant variable'}
+                  </div>
+                  {stats.coverage > 0 && (
+                    <div className="text-lg text-gray-600">
+                      Couverture: {stats.coverage}%
+                    </div>
+                  )}
+                  {scholarship.renewable && (
+                    <div className="flex items-center justify-end gap-1 text-green-600">
+                      <CheckCircle className="h-4 w-4" />
+                      <span className="font-medium">Renouvelable</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="container mx-auto px-4 py-8">
+        {/* Statistiques */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <StatCard
+            title="Montant"
+            value={stats.amount > 0 ? `${stats.amount.toLocaleString()} ${stats.currency}` : 'Variable'}
+            icon={DollarSign}
+            color="blue"
+          />
+          <StatCard
+            title="Durée"
+            value={stats.duration > 0 ? `${stats.duration} mois` : 'N/A'}
+            icon={Clock}
+            color="green"
+          />
+          <StatCard
+            title="Vues"
+            value={stats.views.toString()}
+            icon={Users}
+            color="purple"
+          />
+          <StatCard
+            title="Candidatures"
+            value={stats.applications.toString()}
+            icon={FileText}
+            color="amber"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex-1">
+            <div className="flex items-center space-x-2 mb-4">
+              {scholarship.is_featured && (
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
+                  <Star className="h-4 w-4 mr-1" />
+                  Recommandée
+                </span>
+              )}
+              {scholarship.scholarship_type && (
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-white/20 text-white">
+                  {scholarship.scholarship_type}
+                </span>
+              )}
+            </div>
+            
+            <h1 className="text-3xl lg:text-4xl font-bold mb-4">
+              {scholarship.title}
+            </h1>
+            
+            <p className="text-xl text-blue-100 mb-6">
+              {scholarship.description}
+            </p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {scholarship.amount && (
+                <div className="flex items-center space-x-2">
+                  <DollarSign className="h-5 w-5" />
+                  <div>
+                    <div className="font-semibold">
+                      {scholarship.amount.toLocaleString()} {scholarship.currency || 'EUR'}
+                    </div>
+                    <div className="text-sm text-blue-100">Montant de la bourse</div>
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex items-center space-x-2">
+                <Clock className={isExpired ? 'h-5 w-5 text-red-300' : isExpiringSoon ? 'h-5 w-5 text-yellow-300' : 'h-5 w-5'} />
+                <div>
+                  <div className={`font-semibold ${isExpired ? 'text-red-300' : isExpiringSoon ? 'text-yellow-300' : ''}`}>
+                    {deadline.toLocaleDateString('fr-FR')}
+                  </div>
+                  <div className="text-sm text-blue-100">
+                    {isExpired ? 'Expirée' : isExpiringSoon ? `${daysUntilDeadline} jours restants` : 'Date limite'}
+                  </div>
+                </div>
+              </div>
+              
+              {scholarship.study_level && (
+                <div className="flex items-center space-x-2">
+                  <GraduationCap className="h-5 w-5" />
+                  <div>
+                    <div className="font-semibold">{scholarship.study_level}</div>
+                    <div className="text-sm text-blue-100">Niveau d'études</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          
+          <div className="flex flex-col space-y-3 mt-6 lg:mt-0 lg:ml-8">
+            {user && (
+              <Button
+                variant={isFavorite ? 'secondary' : 'outline'}
+                icon={Heart}
+                onClick={handleToggleFavorite}
+                className={`${isFavorite ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white border-white/30'}`}
+              >
+                {isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+              </Button>
+            )}
+            
+            {scholarship.application_url && (
+              <a href={scholarship.application_url} target="_blank" rel="noopener noreferrer">
+                <Button
+                  variant="primary"
+                  icon={ExternalLink}
+                  fullWidth
+                  className="bg-white text-blue-600 hover:bg-gray-50"
+                  disabled={isExpired}
+                >
+                  {isExpired ? 'Candidatures fermées' : 'Postuler maintenant'}
+                </Button>
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Contenu principal */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Description */}
+            {scholarship.description && (
+              <Card>
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <FileText className="h-5 w-5 text-blue-600" />
+                  Description
+                </h2>
+                <div className="prose prose-gray max-w-none">
+                  <p className="text-gray-600 leading-relaxed whitespace-pre-line">{scholarship.description}</p>
+                </div>
+              </Card>
+            )}
+
+            {/* Programme académique */}
+            {academicProgram && (
+              <Card>
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <BookOpen className="h-5 w-5 text-green-600" />
+                  Programme d'études
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <h3 className="font-medium text-gray-900 mb-1">Nom du programme</h3>
+                    <p className="text-gray-600">{academicProgram.name}</p>
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-gray-900 mb-1">Type de diplôme</h3>
+                    <p className="text-gray-600">{academicProgram.degree_type}</p>
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-gray-900 mb-1">Domaine d'étude</h3>
+                    <p className="text-gray-600">{academicProgram.field_of_study}</p>
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-gray-900 mb-1">Durée</h3>
+                    <p className="text-gray-600">{academicProgram.duration_years} ans</p>
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-gray-900 mb-1">Langue d'enseignement</h3>
+                    <p className="text-gray-600">{academicProgram.language}</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* Critères d'éligibilité */}
+            {eligibilityCriteria.length > 0 && (
+              <Card>
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <Target className="h-5 w-5 text-purple-600" />
+                  Critères d'éligibilité
+                </h2>
+                <div className="space-y-3">
+                  {eligibilityCriteria.map((criteria) => (
+                    <div key={criteria.id} className={`flex items-start gap-3 p-3 rounded-lg ${
+                      criteria.is_required ? 'bg-red-50 border border-red-200' : 'bg-blue-50 border border-blue-200'
+                    }`}>
+                      {criteria.is_required ? (
+                        <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                      ) : (
+                        <CheckCircle className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                      )}
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-900 mb-1">
+                          {criteria.criteria_type}
+                          {criteria.is_required && <span className="text-red-500 ml-1">*</span>}
+                        </div>
+                        <div className="text-gray-600">
+                          {criteria.criteria_value}
+                          {criteria.min_value !== null && criteria.max_value !== null && (
+                            <span className="ml-2 text-sm">
+                              ({criteria.min_value} - {criteria.max_value} {criteria.unit})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Exigences */}
+            {scholarship.requirements && scholarship.requirements.length > 0 && (
+              <Card>
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <User className="h-5 w-5 text-amber-600" />
+                  Exigences
+                </h2>
+                <div className="space-y-2">
+                  {scholarship.requirements.map((requirement, index) => (
+                    <div key={index} className="flex items-start gap-2">
+                      <div className="w-2 h-2 bg-amber-600 rounded-full mt-2 flex-shrink-0"></div>
+                      <span className="text-gray-600">{requirement}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Documents requis */}
+            {scholarship.documents_required && scholarship.documents_required.length > 0 && (
+              <Card>
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <Download className="h-5 w-5 text-indigo-600" />
+                  Documents requis
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {scholarship.documents_required.map((document, index) => (
+                    <div key={index} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
+                      <FileText className="h-4 w-4 text-indigo-600 flex-shrink-0" />
+                      <span className="text-gray-700">{document}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Processus de candidature */}
+            {scholarship.application_process && scholarship.application_process.length > 0 && (
+              <Card>
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <CheckCircle className="h-5 w-5 text-green-600" />
+                  Processus de candidature
+                </h2>
+                <div className="space-y-4">
+                  {scholarship.application_process.map((step, index) => (
+                    <div key={index} className="flex items-start gap-4">
+                      <div className="flex-shrink-0 w-8 h-8 bg-green-100 text-green-600 rounded-full flex items-center justify-center font-bold text-sm">
+                        {index + 1}
+                      </div>
+                      <div className="flex-1 pt-1">
+                        <p className="text-gray-700">{step}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Description détaillée si différente de description */}
+            {scholarship.detailed_description && scholarship.detailed_description !== scholarship.description && (
+              <Card>
+                <h2 className="text-2xl font-bold text-gray-900 mb-4">Description détaillée</h2>
+                <div className="prose max-w-none text-gray-700">
+                  {scholarship.detailed_description.split('\n').map((paragraph, index) => (
+                    <p key={index} className="mb-4">{paragraph}</p>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Critères d'éligibilité originaux si pas de table séparée */}
+            {eligibilityCriteria.length === 0 && scholarship.eligibility_criteria && (
+              <Card>
+                <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center">
+                  <CheckCircle className="h-6 w-6 mr-2 text-green-600" />
+                  Critères d'éligibilité
+                </h2>
+                <div className="prose max-w-none text-gray-700">
+                  {scholarship.eligibility_criteria.split('\n').map((criterion, index) => (
+                    <p key={index} className="mb-3 flex items-start">
+                      <span className="inline-block w-2 h-2 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                      {criterion}
+                    </p>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Exigences de candidature originales si pas de table séparée */}
+            {(!scholarship.documents_required || scholarship.documents_required.length === 0) && scholarship.application_requirements && scholarship.application_requirements.length > 0 && (
+              <Card>
+                <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center">
+                  <FileText className="h-6 w-6 mr-2 text-blue-600" />
+                  Documents requis
+                </h2>
+                <ul className="space-y-3">
+                  {scholarship.application_requirements.map((requirement, index) => (
+                    <li key={index} className="flex items-start">
+                      <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 mr-3 flex-shrink-0" />
+                      <span className="text-gray-700">{requirement}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            )}
+
+            {/* Avantages */}
+            {scholarship.benefits && scholarship.benefits.length > 0 && (
+              <Card>
+                <h2 className="text-2xl font-bold text-gray-900 mb-4">
+                  Avantages offerts
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {scholarship.benefits.map((benefit, index) => (
+                    <div key={index} className="flex items-center p-3 bg-green-50 rounded-lg">
+                      <CheckCircle className="h-5 w-5 text-green-600 mr-3 flex-shrink-0" />
+                      <span className="text-gray-700">{benefit}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+          </div>
+          
+          {/* Critères d'éligibilité */}
+          <Card>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center">
+              <CheckCircle className="h-6 w-6 mr-2 text-green-600" />
+              Critères d'éligibilité
+            </h2>
+            <div className="prose max-w-none text-gray-700">
+              {scholarship.eligibility_criteria.split('\n').map((criterion, index) => (
+                <p key={index} className="mb-3 flex items-start">
+                  <span className="inline-block w-2 h-2 bg-blue-600 rounded-full mt-2 mr-3 flex-shrink-0"></span>
+                  {criterion}
+                </p>
+              ))}
+            </div>
+          </Card>
+          
+          {/* Exigences de candidature */}
+          {scholarship.application_requirements && scholarship.application_requirements.length > 0 && (
+            <Card>
+              <h2 className="text-2xl font-bold text-gray-900 mb-4 flex items-center">
+                <FileText className="h-6 w-6 mr-2 text-blue-600" />
+                Documents requis
+              </h2>
+              <ul className="space-y-3">
+                {scholarship.application_requirements.map((requirement, index) => (
+                  <li key={index} className="flex items-start">
+                    <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 mr-3 flex-shrink-0" />
+                    <span className="text-gray-700">{requirement}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+          
+          {/* Processus de candidature */}
+          {scholarship.application_process && scholarship.application_process.length > 0 && (
+            <Card>
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">
+                Processus de candidature
+              </h2>
+              <ol className="space-y-4">
+                {scholarship.application_process.map((step, index) => (
+                  <li key={index} className="flex items-start">
+                    <span className="flex-shrink-0 w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold mr-4">
+                      {index + 1}
+                    </span>
+                    <span className="text-gray-700 pt-1">{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </Card>
+          )}
+          
+          {/* Avantages */}
+          {scholarship.benefits && scholarship.benefits.length > 0 && (
+            <Card>
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">
+                Avantages offerts
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {scholarship.benefits.map((benefit, index) => (
+                  <div key={index} className="flex items-center p-3 bg-green-50 rounded-lg">
+                    <CheckCircle className="h-5 w-5 text-green-600 mr-3 flex-shrink-0" />
+                    <span className="text-gray-700">{benefit}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+          {/* Panneau latéral */}
+          <div className="space-y-6">
+            {/* Actions principales */}
+            <Card>
+              <h3 className="text-lg font-semibold mb-4">Actions</h3>
+              <div className="space-y-3">
+                {user && (
+                  <Button
+                    variant={isFavorite ? 'secondary' : 'outline'}
+                    icon={Heart}
+                    onClick={handleToggleFavorite}
+                    fullWidth
+                    className={`${isFavorite ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white hover:bg-gray-50 text-gray-900 border-gray-300'}`}
+                  >
+                    {isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                  </Button>
+                )}
+                
+                {scholarship.website_url && (
+                  <a href={scholarship.website_url} target="_blank" rel="noopener noreferrer" className="block">
+                    <Button
+                      variant="primary"
+                      icon={ExternalLink}
+                      fullWidth
+                      disabled={isExpired}
+                    >
+                      {isExpired ? 'Candidatures fermées' : 'Postuler maintenant'}
+                    </Button>
+                  </a>
+                )}
+              </div>
+            </Card>
+
+            {/* Informations importantes */}
+            <Card>
+              <h3 className="text-lg font-semibold mb-4">Informations clés</h3>
+              <div className="space-y-3">
+                {scholarship.application_deadline && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Date limite:</span>
+                    <span className="font-semibold text-red-600">
+                      {new Date(scholarship.application_deadline).toLocaleDateString('fr-FR')}
+                    </span>
+                  </div>
+                )}
+                {scholarship.study_start_date && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Début des études:</span>
+                    <span className="font-semibold">
+                      {new Date(scholarship.study_start_date).toLocaleDateString('fr-FR')}
+                    </span>
+                  </div>
+                )}
+                {scholarship.duration_months && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Durée:</span>
+                    <span className="font-semibold">{scholarship.duration_months} mois</span>
+                  </div>
+                )}
+                {scholarship.renewable !== undefined && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Renouvelable:</span>
+                    <span className={`font-semibold ${
+                      scholarship.renewable ? 'text-green-600' : 'text-red-600'
+                    }`}>
+                      {scholarship.renewable ? 'Oui' : 'Non'}
+                    </span>
+                    {scholarship.max_renewals && (
+                      <span className="text-sm text-gray-500">({scholarship.max_renewals} fois max)</span>
+                    )}
+                  </div>
+                )}
+                {scholarship.number_of_awards && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Nombre de bourses:</span>
+                    <span className="font-semibold">{scholarship.number_of_awards}</span>
+                  </div>
+                )}
+                {scholarship.min_gpa && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">GPA minimum:</span>
+                    <span className="font-semibold">{scholarship.min_gpa}</span>
+                  </div>
+                )}
+                {scholarship.min_age && scholarship.max_age && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Âge requis:</span>
+                    <span className="font-semibold">{scholarship.min_age} - {scholarship.max_age} ans</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Statut:</span>
+                  <span className={`font-semibold ${
+                    scholarshipStatus.color === 'green' ? 'text-green-600' :
+                    scholarshipStatus.color === 'amber' ? 'text-amber-600' :
+                    scholarshipStatus.color === 'orange' ? 'text-orange-600' :
+                    'text-red-600'
+                  }`}>
+                    {scholarshipStatus.label}
+                  </span>
+                </div>
+              </div>
+            </Card>
+
+            {/* Pays cibles */}
+            {scholarship.target_countries && scholarship.target_countries.length > 0 && (
+              <Card>
+                <h3 className="text-lg font-semibold mb-4">Pays cibles</h3>
+                <div className="flex flex-wrap gap-2">
+                  {scholarship.target_countries.map((country, index) => (
+                    <span key={index} className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">
+                      {country}
+                    </span>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Pays éligibles */}
+            {scholarship.eligible_countries && scholarship.eligible_countries.length > 0 && (
+              <Card>
+                <h3 className="text-lg font-semibold mb-4">Pays éligibles</h3>
+                <div className="flex flex-wrap gap-2">
+                  {scholarship.eligible_countries.map((country, index) => (
+                    <span key={index} className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
+                      {country}
+                    </span>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Domaines d'études */}
+            {scholarship.study_fields && scholarship.study_fields.length > 0 && (
+              <Card>
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                  Domaines d'études
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {scholarship.study_fields.map((field, index) => (
+                    <span key={index} className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm">
+                      {field}
+                    </span>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Contact */}
+            {(scholarship.contact_email || scholarship.contact_phone) && (
+              <Card>
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                  Contact
+                </h3>
+                <div className="space-y-3">
+                  {scholarship.contact_email && (
+                    <div className="flex items-center space-x-2">
+                      <Mail className="h-4 w-4 text-gray-400" />
+                      <a href={`mailto:${scholarship.contact_email}`} className="text-blue-600 hover:text-blue-800">
+                        {scholarship.contact_email}
+                      </a>
+                    </div>
+                  )}
+                  {scholarship.contact_phone && (
+                    <div className="flex items-center space-x-2">
+                      <Phone className="h-4 w-4 text-gray-400" />
+                      <a href={`tel:${scholarship.contact_phone}`} className="text-blue-600 hover:text-blue-800">
+                        {scholarship.contact_phone}
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {/* Bourses similaires */}
+            {relatedScholarships.length > 0 && (
+              <Card>
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <Award className="h-5 w-5 text-purple-600" />
+                  Bourses similaires
+                </h3>
+                <div className="space-y-3">
+                  {relatedScholarships.map((related) => (
+                    <Link 
+                      key={related.id}
+                      to={`/scholarship/${related.id}`}
+                      className="block p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                    >
+                      <div className="font-medium text-gray-900 mb-1 line-clamp-2">{related.title}</div>
+                      <div className="text-sm text-gray-600">
+                        {related.scholarship_type} • {related.amount_usd?.toLocaleString() || 'Montant variable'} {related.currency || 'USD'}
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Alerte deadline */}
+            {isExpiringSoon && (
+              <Card className="border-orange-200 bg-orange-50">
+                <div className="flex items-start space-x-3">
+                  <AlertCircle className="h-6 w-6 text-orange-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="text-lg font-semibold text-orange-800">Attention!</h3>
+                    <p className="text-orange-700">
+                      Cette bourse expire dans {daysUntilDeadline} jour{daysUntilDeadline > 1 ? 's' : ''}. 
+                      Dépêchez-vous de postuler!
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* Action de candidature premium */}
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg shadow-sm p-6 text-white">
+              <h3 className="text-lg font-semibold mb-4">Postuler maintenant</h3>
+              <p className="text-blue-100 mb-4 text-sm">
+                Ne manquez pas cette opportunité ! Préparez vos documents et postulez dès maintenant.
+              </p>
+              {scholarship.website_url ? (
+                <a 
+                  href={scholarship.website_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`w-full px-4 py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
+                    isExpired 
+                      ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                      : 'bg-white text-blue-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  {isExpired ? 'Candidatures fermées' : 'Candidater en ligne'}
+                </a>
+              ) : scholarship.contact_email ? (
+                <a 
+                  href={`mailto:${scholarship.contact_email}?subject=Candidature - ${scholarship.title}`}
+                  className="w-full bg-white text-blue-600 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
+                >  
+                  <Mail className="h-4 w-4" />
+                  Envoyer un email
+                </a>
+              ) : (
+                <button className="w-full bg-white/20 text-white px-4 py-2 rounded-lg font-medium cursor-not-allowed" disabled>
+                  Contact non disponible
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
