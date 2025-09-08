@@ -282,12 +282,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profileData: updates
       })
       
-      if (result?.data) {
+      if (result?.success && result?.data) {
         setProfile(result.data)
         toast.success('Profil mis à jour avec succès')
         return result.data
       } else {
-        throw new Error('Erreur lors de la mise à jour du profil')
+        throw new Error(result?.error?.message || 'Erreur lors de la mise à jour du profil')
       }
     } catch (error: any) {
       console.error('Update profile error:', error)
@@ -314,21 +314,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       if (!user) throw new Error('Utilisateur non connecté')
       
+      setLoading(true)
       const result = await invokeEdgeFunction('profile-manager', {
         action: 'update_student_profile',
         userId: user.id,
         profileData: updates
       })
       
-      if (result?.data) {
+      if (result?.success && result?.data) {
         setStudentProfile(result.data)
         toast.success('Profil étudiant mis à jour')
         return result.data
+      } else {
+        throw new Error(result?.error?.message || 'Erreur lors de la mise à jour')
       }
     } catch (error: any) {
       console.error('Update student profile error:', error)
       toast.error(error.message || 'Erreur lors de la mise à jour')
       throw error
+    } finally {
+      setLoading(false)
     }
   }
   
@@ -336,21 +341,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       if (!user) throw new Error('Utilisateur non connecté')
       
+      setLoading(true)
       const result = await invokeEdgeFunction('profile-manager', {
         action: 'update_institution_profile',
         userId: user.id,
         profileData: updates
       })
       
-      if (result?.data) {
+      if (result?.success && result?.data) {
         setInstitutionProfile(result.data)
         toast.success('Profil institution mis à jour')
         return result.data
+      } else {
+        throw new Error(result?.error?.message || 'Erreur lors de la mise à jour')
       }
     } catch (error: any) {
       console.error('Update institution profile error:', error)
       toast.error(error.message || 'Erreur lors de la mise à jour')
       throw error
+    } finally {
+      setLoading(false)
     }
   }
 

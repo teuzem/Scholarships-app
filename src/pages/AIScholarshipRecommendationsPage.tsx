@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { supabase } from '@/lib/supabase'
+import { useScholarshipRecommendations, useRegenerateRecommendations, useMarkRecommendationViewed } from '@/hooks/useMLRecommendations'
+import { useAddToFavorites } from '@/hooks/useDatabase'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Badge } from '@/components/ui/Badge'
 import { 
   Award, 
   Star, 
@@ -15,214 +17,113 @@ import {
   TrendingUp,
   Globe,
   GraduationCap,
-  User
+  User,
+  Target,
+  Zap,
+  AlertTriangle,
+  CheckCircle,
+  BarChart3,
+  Eye
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 
-interface ScholarshipRecommendation {
-  id: string
-  title: string
-  description: string
-  amount: number
-  currency: string
-  application_deadline: string
-  score: number
-  reasons: string[]
-  institution_name?: string
-  country?: string
-  study_level?: string
-  field_of_study?: string
-}
-
 export default function AIScholarshipRecommendationsPage() {
-  const { user, profile, studentProfile } = useAuth()
-  const [loading, setLoading] = useState(true)
-  const [recommendations, setRecommendations] = useState<ScholarshipRecommendation[]>([])
+  const { user, profile } = useAuth()
   const [filters, setFilters] = useState({
     minScore: 70,
-    studyLevel: 'all',
-    country: 'all'
+    confidenceLevel: 'all',
+    urgencyLevel: 'all',
+    limit: 20
   })
-  const [refreshing, setRefreshing] = useState(false)
+  const [viewedRecommendations, setViewedRecommendations] = useState<Set<string>>(new Set())
 
-  useEffect(() => {
-    if (user && profile) {
-      loadRecommendations()
-    }
-  }, [user, profile])
+  // Hooks pour les données
+  const { 
+    data: recommendations, 
+    isLoading, 
+    error,
+    refetch 
+  } = useScholarshipRecommendations({
+    limit: filters.limit,
+    minScore: filters.minScore,
+    autoRefresh: true
+  })
+  
+  const regenerateRecommendations = useRegenerateRecommendations()
+  const addToFavorites = useAddToFavorites()
+  const markAsViewed = useMarkRecommendationViewed()
 
-  const loadRecommendations = async () => {
-    try {
-      setLoading(true)
-      
-      // Récupérer les bourses actives
-      const { data: scholarships, error } = await supabase
-        .from('scholarships')
-        .select('*')
-        .eq('is_active', true)
-        .gte('application_deadline', new Date().toISOString())
-        .order('created_at', { ascending: false })
-      
-      if (error) {
-        throw error
-      }
-
-      // Générer des recommandations basées sur le profil étudiant
-      const recommendationsWithScores = scholarships?.map(scholarship => {
-        const score = calculateRecommendationScore(scholarship)
-        const reasons = generateReasons(scholarship, score)
-        
-        return {
-          ...scholarship,
-          score,
-          reasons
-        }
-      }) || []
-
-      // Trier par score décroissant
-      recommendationsWithScores.sort((a, b) => b.score - a.score)
-      
-      setRecommendations(recommendationsWithScores)
-    } catch (error) {
-      console.error('Erreur chargement recommandations:', error)
-      toast.error('Erreur lors du chargement des recommandations')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const calculateRecommendationScore = (scholarship: any): number => {
-    let score = 50 // Score de base
-    
-    // Facteurs basés sur le profil étudiant
-    if (studentProfile) {
-      // Domaine d'étude correspondant
-      if (scholarship.field_of_study && studentProfile.field_of_study) {
-        if (scholarship.field_of_study.toLowerCase().includes(studentProfile.field_of_study.toLowerCase()) ||
-            studentProfile.field_of_study.toLowerCase().includes(scholarship.field_of_study.toLowerCase())) {
-          score += 25
-        }
-      }
-      
-      // Niveau d'étude correspondant
-      if (scholarship.study_level && studentProfile.current_education_level) {
-        if (scholarship.study_level === studentProfile.current_education_level) {
-          score += 20
-        }
-      }
-      
-      // Pays préférés
-      if (scholarship.country && studentProfile.preferred_study_countries) {
-        if (studentProfile.preferred_study_countries.includes(scholarship.country)) {
-          score += 15
-        }
-      }
-      
-      // GPA minimum
-      if (scholarship.min_gpa && studentProfile.gpa) {
-        if (studentProfile.gpa >= scholarship.min_gpa) {
-          score += 10
-        } else {
-          score -= 20
-        }
-      }
-    }
-    
-    // Facteurs temporels
-    const deadline = new Date(scholarship.application_deadline)
-    const now = new Date()
-    const daysUntilDeadline = Math.ceil((deadline.getTime() - now.getTime()) / (1000 * 3600 * 24))
-    
-    if (daysUntilDeadline > 30) {
-      score += 5 // Plus de temps pour postuler
-    } else if (daysUntilDeadline < 7) {
-      score -= 10 // Deadline approche
-    }
-    
-    // Montant de la bourse
-    if (scholarship.amount) {
-      if (scholarship.amount >= 10000) score += 10
-      if (scholarship.amount >= 20000) score += 5
-    }
-    
-    return Math.min(Math.max(score, 0), 100) // Entre 0 et 100
-  }
-
-  const generateReasons = (scholarship: any, score: number): string[] => {
-    const reasons: string[] = []
-    
-    if (score >= 90) {
-      reasons.push('Correspondance parfaite avec votre profil')
-    }
-    
-    if (studentProfile?.field_of_study && scholarship.field_of_study) {
-      if (scholarship.field_of_study.toLowerCase().includes(studentProfile.field_of_study.toLowerCase())) {
-        reasons.push('Domaine d\'étude correspondant')
-      }
-    }
-    
-    if (studentProfile?.current_education_level === scholarship.study_level) {
-      reasons.push('Niveau d\'étude compatible')
-    }
-    
-    if (studentProfile?.preferred_study_countries?.includes(scholarship.country)) {
-      reasons.push('Pays de destination préféré')
-    }
-    
-    if (scholarship.amount >= 15000) {
-      reasons.push('Financement substantiel')
-    }
-    
-    const deadline = new Date(scholarship.application_deadline)
-    const now = new Date()
-    const daysUntilDeadline = Math.ceil((deadline.getTime() - now.getTime()) / (1000 * 3600 * 24))
-    
-    if (daysUntilDeadline > 30) {
-      reasons.push('Délai confortable pour postuler')
-    }
-    
-    if (reasons.length === 0) {
-      reasons.push('Critères d\'éligibilité correspondants')
-    }
-    
-    return reasons.slice(0, 4) // Limiter à 4 raisons
-  }
-
-  const refreshRecommendations = async () => {
-    setRefreshing(true)
-    await loadRecommendations()
-    setRefreshing(false)
-    toast.success('Recommandations mises à jour')
-  }
-
-  const saveToFavorites = async (scholarshipId: string) => {
-    try {
-      await supabase
-        .from('favorites')
-        .insert({
-          student_id: user?.id,
-          scholarship_id: scholarshipId
-        })
-      
-      toast.success('Bourse sauvegardée en favoris')
-    } catch (error) {
-      toast.error('Erreur lors de la sauvegarde')
-    }
-  }
-
-  const filteredRecommendations = recommendations.filter(rec => {
-    if (rec.score < filters.minScore) return false
-    if (filters.studyLevel !== 'all' && rec.study_level !== filters.studyLevel) return false
-    if (filters.country !== 'all' && rec.country !== filters.country) return false
+  // Filtrer les recommandations
+  const filteredRecommendations = recommendations?.filter(rec => {
+    if (rec.match_score < filters.minScore) return false
+    if (filters.confidenceLevel !== 'all' && rec.confidence_level !== filters.confidenceLevel) return false
+    if (filters.urgencyLevel !== 'all' && rec.urgency_level !== filters.urgencyLevel) return false
     return true
-  })
+  }) || []
+
+  const handleRefreshRecommendations = async () => {
+    try {
+      await regenerateRecommendations.mutateAsync({ 
+        type: 'scholarship',
+        options: { limit: filters.limit, minScore: filters.minScore }
+      })
+    } catch (error) {
+      // Error handled by mutation
+    }
+  }
+
+  const handleSaveToFavorites = async (scholarshipId: string) => {
+    if (!user) return
+    
+    try {
+      await addToFavorites.mutateAsync({ 
+        userId: user.id, 
+        scholarshipId 
+      })
+    } catch (error) {
+      // Error handled by mutation
+    }
+  }
+
+  const handleViewRecommendation = async (recommendationId: string) => {
+    if (!viewedRecommendations.has(recommendationId)) {
+      setViewedRecommendations(prev => new Set([...prev, recommendationId]))
+      
+      try {
+        await markAsViewed.mutateAsync({
+          recommendationId,
+          type: 'scholarship'
+        })
+      } catch (error) {
+        console.error('Error marking as viewed:', error)
+      }
+    }
+  }
 
   const getScoreColor = (score: number) => {
     if (score >= 90) return 'text-green-600 bg-green-100'
     if (score >= 80) return 'text-blue-600 bg-blue-100'
     if (score >= 70) return 'text-yellow-600 bg-yellow-100'
     return 'text-gray-600 bg-gray-100'
+  }
+
+  const getConfidenceColor = (level: string) => {
+    switch (level) {
+      case 'high': return 'success'
+      case 'medium': return 'warning'
+      case 'low': return 'error'
+      default: return 'default'
+    }
+  }
+
+  const getUrgencyColor = (level: string) => {
+    switch (level) {
+      case 'high': return 'error'
+      case 'medium': return 'warning'
+      case 'low': return 'success'
+      default: return 'default'
+    }
   }
 
   const formatCurrency = (amount: number, currency: string = 'EUR') => {
@@ -248,13 +149,33 @@ export default function AIScholarshipRecommendationsPage() {
     return diffDays
   }
 
-  if (loading) {
+  if (error) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <Card className="p-8 text-center">
+          <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            Erreur lors du chargement
+          </h3>
+          <p className="text-gray-600 mb-4">
+            {error.message || 'Une erreur est survenue lors du chargement des recommandations'}
+          </p>
+          <Button onClick={() => refetch()}>
+            Réessayer
+          </Button>
+        </Card>
+      </div>
+    )
+  }
+
+  if (isLoading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex items-center justify-center h-64">
           <div className="text-center">
             <Brain className="w-8 h-8 text-blue-600 animate-pulse mx-auto mb-4" />
-            <p className="text-gray-600">Génération des recommandations de bourses...</p>
+            <p className="text-gray-600">Analyse IA de votre profil en cours...</p>
+            <p className="text-sm text-gray-500 mt-2">Génération des recommandations personnalisées</p>
           </div>
         </div>
       </div>
@@ -268,13 +189,411 @@ export default function AIScholarshipRecommendationsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-4xl font-bold text-gray-900 mb-2 flex items-center gap-3">
-              <Award className="w-8 h-8 text-blue-600" />
+              <Brain className="w-8 h-8 text-blue-600" />
               Bourses recommandées pour vous
             </h1>
             <p className="text-lg text-gray-600">
-              Découvrez les bourses qui correspondent parfaitement à votre profil académique
+              Recommandations IA basées sur l'analyse approfondie de votre profil académique
             </p>
           </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="info" className="flex items-center gap-1">
+              <Target className="w-3 h-3" />
+              {filteredRecommendations.length} recommandations
+            </Badge>
+            <Button
+              onClick={handleRefreshRecommendations}
+              disabled={regenerateRecommendations.isPending}
+              icon={RefreshCw}
+              variant="outline"
+              className={regenerateRecommendations.isPending ? 'animate-spin' : ''}
+            >
+              {regenerateRecommendations.isPending ? 'Génération...' : 'Actualiser'}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Advanced Filters */}
+      <Card className="p-6">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Filter className="w-5 h-5 text-gray-500" />
+            <span className="font-medium text-gray-700">Filtres avancés</span>
+          </div>
+          <div className="flex gap-4 flex-wrap">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Score minimum
+              </label>
+              <select
+                value={filters.minScore}
+                onChange={(e) => setFilters({...filters, minScore: Number(e.target.value)})}
+                className="border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+              >
+                <option value={50}>50% - Toutes</option>
+                <option value={70}>70% - Bonnes</option>
+                <option value={80}>80% - Très bonnes</option>
+                <option value={90}>90% - Excellentes</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Niveau de confiance
+              </label>
+              <select
+                value={filters.confidenceLevel}
+                onChange={(e) => setFilters({...filters, confidenceLevel: e.target.value})}
+                className="border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">Tous niveaux</option>
+                <option value="high">Confiance élevée</option>
+                <option value="medium">Confiance moyenne</option>
+                <option value="low">Confiance faible</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Urgence
+              </label>
+              <select
+                value={filters.urgencyLevel}
+                onChange={(e) => setFilters({...filters, urgencyLevel: e.target.value})}
+                className="border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">Toutes urgences</option>
+                <option value="high">Urgent (< 2 semaines)</option>
+                <option value="medium">Modéré (< 6 semaines)</option>
+                <option value="low">Pas urgent</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Nombre de résultats
+              </label>
+              <select
+                value={filters.limit}
+                onChange={(e) => setFilters({...filters, limit: Number(e.target.value)})}
+                className="border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+              >
+                <option value={10}>10 bourses</option>
+                <option value={20}>20 bourses</option>
+                <option value={50}>50 bourses</option>
+                <option value={100}>100 bourses</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Recommendations Summary */}
+      {recommendations && recommendations.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Card className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Score moyen</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {Math.round(recommendations.reduce((sum, r) => sum + r.match_score, 0) / recommendations.length)}%
+                </p>
+              </div>
+              <BarChart3 className="w-8 h-8 text-blue-600" />
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Confiance élevée</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {recommendations.filter(r => r.confidence_level === 'high').length}
+                </p>
+              </div>
+              <CheckCircle className="w-8 h-8 text-green-600" />
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Urgentes</p>
+                <p className="text-2xl font-bold text-red-600">
+                  {recommendations.filter(r => r.urgency_level === 'high').length}
+                </p>
+              </div>
+              <Zap className="w-8 h-8 text-red-600" />
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Montant total</p>
+                <p className="text-2xl font-bold text-purple-600">
+                  {formatCurrency(
+                    recommendations.reduce((sum, r) => sum + (r.scholarship_data.amount || 0), 0)
+                  )}
+                </p>
+              </div>
+              <DollarSign className="w-8 h-8 text-purple-600" />
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Recommendations Grid */}
+      {filteredRecommendations.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredRecommendations.map((recommendation) => {
+            const daysLeft = getDaysUntilDeadline(recommendation.scholarship_data.application_deadline)
+            const isViewed = viewedRecommendations.has(recommendation.scholarship_id)
+            
+            return (
+              <Card 
+                key={recommendation.scholarship_id} 
+                className={`h-full transition-all duration-200 ${
+                  isViewed ? 'opacity-90' : 'shadow-lg hover:shadow-xl'
+                }`}
+              >
+                <div className="flex flex-col h-full">
+                  {/* Header with advanced indicators */}
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <div className={`px-3 py-1 rounded-full text-sm font-bold ${getScoreColor(recommendation.match_score)}`}>
+                        {Math.round(recommendation.match_score)}%
+                      </div>
+                      <Badge variant={getConfidenceColor(recommendation.confidence_level)} size="sm">
+                        {recommendation.confidence_level === 'high' ? 'Haute confiance' :
+                         recommendation.confidence_level === 'medium' ? 'Confiance moyenne' : 'Confiance faible'}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Badge variant={getUrgencyColor(recommendation.urgency_level)} size="sm">
+                        {recommendation.urgency_level === 'high' ? 'Urgent' :
+                         recommendation.urgency_level === 'medium' ? 'Modéré' : 'Pas urgent'}
+                      </Badge>
+                      {isViewed && <Eye className="w-4 h-4 text-gray-400" />}
+                    </div>
+                  </div>
+
+                  {/* Content */}
+                  <div className="flex-grow">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      {recommendation.scholarship_data.title}
+                    </h3>
+                    
+                    <div className="flex items-center gap-4 text-sm text-gray-600 mb-3">
+                      {recommendation.scholarship_data.amount && (
+                        <div className="flex items-center gap-1">
+                          <DollarSign className="w-4 h-4" />
+                          <span className="font-medium text-green-600">
+                            {formatCurrency(recommendation.scholarship_data.amount, recommendation.scholarship_data.currency)}
+                          </span>
+                        </div>
+                      )}
+                      {recommendation.scholarship_data.study_level && (
+                        <div className="flex items-center gap-1">
+                          <GraduationCap className="w-4 h-4" />
+                          <span>{recommendation.scholarship_data.study_level}</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <p className="text-gray-600 text-sm mb-4 line-clamp-3">
+                      {recommendation.scholarship_data.description}
+                    </p>
+
+                    {/* Study Fields */}
+                    {recommendation.scholarship_data.study_fields && recommendation.scholarship_data.study_fields.length > 0 && (
+                      <div className="mb-4">
+                        <div className="flex flex-wrap gap-1">
+                          {recommendation.scholarship_data.study_fields.slice(0, 3).map((field, index) => (
+                            <span key={index} className="px-2 py-1 bg-purple-100 text-purple-700 text-xs rounded">
+                              {field}
+                            </span>
+                          ))}
+                          {recommendation.scholarship_data.study_fields.length > 3 && (
+                            <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded">
+                              +{recommendation.scholarship_data.study_fields.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Deadline with urgency indicator */}
+                    <div className="flex items-center gap-1 text-sm mb-4">
+                      <Clock className={`w-4 h-4 ${
+                        daysLeft <= 7 ? 'text-red-500' : 
+                        daysLeft <= 30 ? 'text-orange-500' : 'text-gray-500'
+                      }`} />
+                      <span className={daysLeft <= 7 ? 'text-red-600 font-medium' : 'text-gray-600'}>
+                        Deadline: {formatDate(recommendation.scholarship_data.application_deadline)}
+                        {daysLeft <= 30 && (
+                          <span className="ml-1 font-medium">
+                            ({daysLeft} jour{daysLeft > 1 ? 's' : ''} restant{daysLeft > 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+
+                    {/* AI Reasons */}
+                    <div className="mb-4">
+                      <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
+                        <Brain className="w-3 h-3" />
+                        Analyse IA - Pourquoi c'est recommandé :
+                      </p>
+                      <div className="space-y-1">
+                        {recommendation.reasons.slice(0, 3).map((reason, index) => (
+                          <div key={index} className="flex items-start gap-2">
+                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full mt-2 flex-shrink-0"></div>
+                            <span className="text-xs text-gray-700">{reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex gap-2 pt-4 border-t">
+                    <Button
+                      onClick={() => handleSaveToFavorites(recommendation.scholarship_id)}
+                      variant="outline"
+                      icon={Heart}
+                      size="sm"
+                      className="flex-1"
+                      disabled={addToFavorites.isPending}
+                    >
+                      Sauvegarder
+                    </Button>
+                    <Link 
+                      to={`/scholarship/${recommendation.scholarship_id}`} 
+                      className="flex-1"
+                      onClick={() => handleViewRecommendation(recommendation.scholarship_id)}
+                    >
+                      <Button
+                        variant="primary"
+                        icon={ExternalLink}
+                        size="sm"
+                        className="w-full"
+                      >
+                        Voir détails
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
+      ) : (
+        <Card>
+          <div className="text-center py-12">
+            <Brain className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              {recommendations?.length === 0 
+                ? 'Aucune recommandation générée'
+                : 'Aucune bourse ne correspond à vos critères'
+              }
+            </h3>
+            <p className="text-gray-600 mb-4">
+              {recommendations?.length === 0 
+                ? 'Complétez votre profil pour obtenir des recommandations personnalisées.'
+                : 'Essayez d\'ajuster vos filtres pour voir plus de recommandations.'
+              }
+            </p>
+            <div className="flex gap-2 justify-center">
+              <Link to="/profile">
+                <Button icon={User}>
+                  Compléter mon profil
+                </Button>
+              </Link>
+              {recommendations?.length === 0 && (
+                <Button
+                  variant="outline"
+                  onClick={handleRefreshRecommendations}
+                  disabled={regenerateRecommendations.isPending}
+                >
+                  Générer des recommandations
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* ML Insights */}
+      {recommendations && recommendations.length > 0 && (
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Brain className="w-5 h-5 text-blue-600" />
+            Insights IA sur vos recommandations
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <h4 className="font-medium text-blue-900 mb-2">Domaines les plus recommandés</h4>
+              <div className="space-y-1">
+                {(() => {
+                  const fieldCounts = recommendations.reduce((acc, r) => {
+                    r.scholarship_data.study_fields?.forEach(field => {
+                      acc[field] = (acc[field] || 0) + 1
+                    })
+                    return acc
+                  }, {} as Record<string, number>)
+                  
+                  return Object.entries(fieldCounts)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3)
+                    .map(([field, count]) => (
+                      <div key={field} className="text-sm text-blue-800">
+                        {field} ({count} bourses)
+                      </div>
+                    ))
+                })()}
+              </div>
+            </div>
+            
+            <div className="bg-green-50 p-4 rounded-lg">
+              <h4 className="font-medium text-green-900 mb-2">Pays les plus adaptés</h4>
+              <div className="space-y-1">
+                {(() => {
+                  const countryCounts = recommendations.reduce((acc, r) => {
+                    r.scholarship_data.target_countries?.forEach(country => {
+                      acc[country] = (acc[country] || 0) + 1
+                    })
+                    return acc
+                  }, {} as Record<string, number>)
+                  
+                  return Object.entries(countryCounts)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3)
+                    .map(([country, count]) => (
+                      <div key={country} className="text-sm text-green-800">
+                        {country} ({count} bourses)
+                      </div>
+                    ))
+                })()}
+              </div>
+            </div>
+            
+            <div className="bg-purple-50 p-4 rounded-lg">
+              <h4 className="font-medium text-purple-900 mb-2">Recommandations urgentes</h4>
+              <div className="space-y-1">
+                <div className="text-sm text-purple-800">
+                  {recommendations.filter(r => r.urgency_level === 'high').length} bourses urgentes
+                </div>
+                <div className="text-sm text-purple-800">
+                  {recommendations.filter(r => r.urgency_level === 'medium').length} bourses modérées
+                </div>
+                <div className="text-xs text-purple-600 mt-2">
+                  Priorisez les bourses urgentes
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
           <Button
             onClick={refreshRecommendations}
             disabled={refreshing}
