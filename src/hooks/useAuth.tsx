@@ -315,7 +315,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!user) throw new Error('Utilisateur non connecté')
       
       setLoading(true)
-      setLoading(true)
       const result = await invokeEdgeFunction('profile-manager', {
         action: 'update_student_profile',
         userId: user.id,
@@ -328,15 +327,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return result.data
       } else {
         throw new Error(result?.error?.message || 'Erreur lors de la mise à jour')
-      } else {
-        throw new Error(result?.error?.message || 'Erreur lors de la mise à jour')
       }
     } catch (error: any) {
       console.error('Update student profile error:', error)
       toast.error(error.message || 'Erreur lors de la mise à jour')
       throw error
-    } finally {
-      setLoading(false)
     } finally {
       setLoading(false)
     }
@@ -346,7 +341,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       if (!user) throw new Error('Utilisateur non connecté')
       
-      setLoading(true)
       setLoading(true)
       const result = await invokeEdgeFunction('profile-manager', {
         action: 'update_institution_profile',
@@ -360,15 +354,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return result.data
       } else {
         throw new Error(result?.error?.message || 'Erreur lors de la mise à jour')
-      } else {
-        throw new Error(result?.error?.message || 'Erreur lors de la mise à jour')
       }
     } catch (error: any) {
       console.error('Update institution profile error:', error)
       toast.error(error.message || 'Erreur lors de la mise à jour')
       throw error
-    } finally {
-      setLoading(false)
     } finally {
       setLoading(false)
     }

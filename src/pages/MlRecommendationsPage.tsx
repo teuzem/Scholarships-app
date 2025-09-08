@@ -39,7 +39,7 @@ import {
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 
-const AIRecommendationsCenter = () => {
+export default function MlRecommendationsPage() {
   const [filter, setFilter] = useState<'all' | 'scholarship' | 'candidate'>('all')
   const [viewMode, setViewMode] = useState<'overview' | 'detailed'>('overview')
   
@@ -483,7 +483,6 @@ const AIRecommendationsCenter = () => {
   )
 }
 
-// Helper functions
 function getRiskColor(risk: string) {
   switch (risk) {
     case 'low': return 'success'
@@ -503,6 +502,3 @@ Cordialement`)
   
   window.open(`mailto:${email}?subject=${subject}&body=${body}`)
   toast.success('Email de contact ouvert')
-}
-
-export default AIRecommendationsCenter

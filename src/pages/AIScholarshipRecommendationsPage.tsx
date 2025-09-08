@@ -1,11 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
+import { useAddToFavorites } from '@/hooks/useDatabase'
 import { useScholarshipRecommendations, useRegenerateRecommendations, useMarkRecommendationViewed } from '@/hooks/useMLRecommendations'
-import { useAddToFavorites } from '@/hooks/useDatabase'
-import { useAddToFavorites } from '@/hooks/useDatabase'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
 import { Badge } from '@/components/ui/Badge'
 import { 
   Award, 
@@ -25,21 +23,32 @@ import {
   AlertTriangle,
   CheckCircle,
   BarChart3,
-  Eye
-  Target,
-  Zap,
-  AlertTriangle,
-  CheckCircle,
-  BarChart3,
-  Eye
+  Eye,
+  DollarSign
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 
-    refetch 
+export default function AIScholarshipRecommendationsPage() {
+  const { user } = useAuth()
+  const [filters, setFilters] = useState({
+    minScore: 70,
     confidenceLevel: 'all',
     urgencyLevel: 'all',
     limit: 20
+  })
+  const [viewedRecommendations, setViewedRecommendations] = useState<Set<string>>(new Set())
+
+  // Hooks pour les données
+  const { 
+    data: recommendations, 
+    isLoading, 
+    error,
+    refetch 
+  } = useScholarshipRecommendations({
+    limit: filters.limit,
+    minScore: filters.minScore,
+    autoRefresh: true
   })
   
   const regenerateRecommendations = useRegenerateRecommendations()
@@ -70,7 +79,9 @@ import toast from 'react-hot-toast'
     
     try {
       await addToFavorites.mutateAsync({ 
-  const [viewedRecommendations, setViewedRecommendations] = useState<Set<string>>(new Set())
+        userId: user.id,
+        scholarshipId 
+      })
         scholarshipId 
       try {
         await markAsViewed.mutateAsync({
