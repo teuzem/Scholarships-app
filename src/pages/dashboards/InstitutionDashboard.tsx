@@ -1,9 +1,20 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { useNotifications } from '@/hooks/useNotifications'
+import { 
+  useScholarships, 
+  useApplications, 
+  useInstitutions,
+  useCountries,
+  useAnalyticsEvents 
+} from '@/hooks/useDatabase'
+import { useRealtimeSubscription } from '@/hooks/useRealtimeSubscription'
 import { supabase, invokeEdgeFunction } from '@/lib/supabase'
-import { Card } from '@/components/ui/Card'
+import { Card, StatCard } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import DataTable from '@/components/ui/DataTable'
+import Chart from '@/components/ui/Charts'
+import RealTimeIndicator from '@/components/ui/RealTimeIndicator'
 import { 
   Building2, 
   Users, 
@@ -30,36 +41,26 @@ import {
   Target,
   Globe,
   Mail,
-  Phone
+  Phone,
+  MessageSquare,
+  UserCheck,
+  UserX,
+  Zap,
+  TrendingDown,
+  Activity,
+  Search,
+  RefreshCw,
+  Archive,
+  Star,
+  BookOpen,
+  GraduationCap
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import type { Tables } from '@/types/supabase'
 
-// Types
-interface ScholarshipData {
-  id: string
-  title: string
-  amount: number
-  application_deadline: string
-  is_active: boolean
-  created_at: string
-  applications_count?: number
-}
-
-interface ApplicationData {
-  id: string
-  student_id: string
-  scholarship_id: string
-  status: string
-  application_data?: any
-  notes?: string
-  reviewed_at?: string
-  submitted_at?: string
-  updated_at: string
-  created_at: string
-  scholarships?: any
-  profiles?: any
-}
+type Scholarship = Tables<'scholarships'>
+type Application = Tables<'applications'>
 
 interface InstitutionStats {
   totalScholarships: number
@@ -71,12 +72,31 @@ interface InstitutionStats {
   totalFunding: number
   avgApplicationsPerScholarship: number
   successRate: number
+  monthlyApplications: number
+  weeklyViews: number
+  conversionRate: number
+}
+
+interface ScholarshipPerformance {
+  scholarship: Scholarship
+  applicationsCount: number
+  acceptedCount: number
+  rejectedCount: number
+  pendingCount: number
+  viewCount: number
+  conversionRate: number
+  avgProcessingTime: number
 }
 
 export default function InstitutionDashboard() {
   const { user, profile, institutionProfile } = useAuth()
   const { notifications, unreadCount } = useNotifications()
   const [loading, setLoading] = useState(true)
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [selectedTimeframe, setSelectedTimeframe] = useState('30d')
+  const [selectedView, setSelectedView] = useState<'overview' | 'scholarships' | 'applications' | 'analytics'>('overview')
+  
+  // États pour les données
   const [stats, setStats] = useState<InstitutionStats>({
     totalScholarships: 0,
     activeScholarships: 0,
@@ -86,25 +106,56 @@ export default function InstitutionDashboard() {
     rejectedApplications: 0,
     totalFunding: 0,
     avgApplicationsPerScholarship: 0,
-    successRate: 0
+    successRate: 0,
+    monthlyApplications: 0,
+    weeklyViews: 0,
+    conversionRate: 0
   })
-  const [recentScholarships, setRecentScholarships] = useState<ScholarshipData[]>([])
-  const [recentApplications, setRecentApplications] = useState<ApplicationData[]>([])
-  const [topPerformingScholarships, setTopPerformingScholarships] = useState<ScholarshipData[]>([])
+  
+  const [institutionScholarships, setInstitutionScholarships] = useState<Scholarship[]>([])
+  const [institutionApplications, setInstitutionApplications] = useState<Application[]>([])
+  const [scholarshipPerformance, setScholarshipPerformance] = useState<ScholarshipPerformance[]>([])
+  const [recentActivity, setRecentActivity] = useState<any[]>([])
+
+  // Hooks pour les données en temps réel
+  const { data: allScholarships, refetch: refetchScholarships } = useScholarships()
+  const { data: allApplications, refetch: refetchApplications } = useApplications()
+  const { data: analyticsEvents } = useAnalyticsEvents()
+
+  // Synchronisation temps réel
+  const { isConnected: scholarshipsConnected } = useRealtimeSubscription({
+    table: 'scholarships',
+    filter: `institution_id=eq.${user?.id}`,
+    onChange: () => {
+      setLastUpdate(new Date())
+      loadInstitutionData()
+    }
+  })
+
+  const { isConnected: applicationsConnected } = useRealtimeSubscription({
+    table: 'applications',
+    onChange: () => {
+      setLastUpdate(new Date())
+      loadApplicationsData()
+    }
+  })
+
+  const isConnected = scholarshipsConnected && applicationsConnected
 
   useEffect(() => {
     if (user && profile && profile.user_type === 'institution') {
       loadDashboardData()
     }
-  }, [user, profile])
+  }, [user, profile, selectedTimeframe])
 
   const loadDashboardData = async () => {
     try {
       setLoading(true)
       await Promise.all([
-        loadScholarshipsData(),
+        loadInstitutionData(),
         loadApplicationsData(),
-        loadPerformanceData()
+        loadPerformanceData(),
+        loadAnalyticsData()
       ])
     } catch (error) {
       console.error('Error loading dashboard data:', error)
@@ -114,126 +165,233 @@ export default function InstitutionDashboard() {
     }
   }
 
-  const loadScholarshipsData = async () => {
+  const loadInstitutionData = async () => {
     try {
-      const { data, error } = await supabase
+      const { data: scholarships, error } = await supabase
         .from('scholarships')
         .select('*')
         .eq('institution_id', user?.id)
         .order('created_at', { ascending: false })
 
-      if (!error && data) {
-        setRecentScholarships(data.slice(0, 5))
-        
-        const totalScholarships = data.length
-        const activeScholarships = data.filter(s => s.is_active).length
-        const totalFunding = data.reduce((sum, s) => sum + (s.amount || 0), 0)
-        
-        setStats(prev => ({
-          ...prev,
-          totalScholarships,
-          activeScholarships,
-          totalFunding
-        }))
-      }
+      if (error) throw error
+
+      setInstitutionScholarships(scholarships || [])
+      
+      const totalScholarships = scholarships?.length || 0
+      const activeScholarships = scholarships?.filter(s => s.is_active).length || 0
+      const totalFunding = scholarships?.reduce((sum, s) => sum + (s.amount || 0), 0) || 0
+      
+      setStats(prev => ({
+        ...prev,
+        totalScholarships,
+        activeScholarships,
+        totalFunding
+      }))
     } catch (error) {
-      console.error('Error loading scholarships:', error)
+      console.error('Error loading institution data:', error)
     }
   }
 
   const loadApplicationsData = async () => {
     try {
-      // Get all applications for this institution's scholarships
-      const { data: scholarships, error: scholarshipsError } = await supabase
+      // Récupérer toutes les candidatures pour les bourses de cette institution
+      const { data: scholarshipIds } = await supabase
         .from('scholarships')
         .select('id')
         .eq('institution_id', user?.id)
 
-      if (scholarshipsError || !scholarships) {
-        throw scholarshipsError
-      }
-
-      const scholarshipIds = scholarships.map(s => s.id)
-      
-      if (scholarshipIds.length === 0) {
+      if (!scholarshipIds || scholarshipIds.length === 0) {
+        setInstitutionApplications([])
         return
       }
 
-      const { data: applications, error: applicationsError } = await supabase
+      const ids = scholarshipIds.map(s => s.id)
+      
+      const { data: applications, error } = await supabase
         .from('applications')
         .select(`
           *,
-          scholarships(title, amount),
-          profiles(full_name, email)
+          scholarships!inner(title, amount, application_deadline),
+          profiles!inner(full_name, email, phone)
         `)
-        .in('scholarship_id', scholarshipIds)
+        .in('scholarship_id', ids)
         .order('created_at', { ascending: false })
 
-      if (!applicationsError && applications) {
-        setRecentApplications(applications.slice(0, 5))
-        
-        // Calculate application stats
-        const totalApplications = applications.length
-        const pendingApplications = applications.filter(app => app.status === 'pending' || app.status === 'under_review').length
-        const acceptedApplications = applications.filter(app => app.status === 'accepted').length
-        const rejectedApplications = applications.filter(app => app.status === 'rejected').length
-        const successRate = totalApplications > 0 ? (acceptedApplications / totalApplications) * 100 : 0
-        const avgApplicationsPerScholarship = stats.totalScholarships > 0 ? totalApplications / stats.totalScholarships : 0
-        
-        setStats(prev => ({
-          ...prev,
-          totalApplications,
-          pendingApplications,
-          acceptedApplications,
-          rejectedApplications,
-          successRate,
-          avgApplicationsPerScholarship
-        }))
-      }
+      if (error) throw error
+
+      setInstitutionApplications(applications || [])
+      
+      // Calculer les statistiques des candidatures
+      const totalApplications = applications?.length || 0
+      const pendingApplications = applications?.filter(app => 
+        app.status === 'pending' || app.status === 'under_review'
+      ).length || 0
+      const acceptedApplications = applications?.filter(app => app.status === 'accepted').length || 0
+      const rejectedApplications = applications?.filter(app => app.status === 'rejected').length || 0
+      const successRate = totalApplications > 0 ? (acceptedApplications / totalApplications) * 100 : 0
+      const avgApplicationsPerScholarship = stats.totalScholarships > 0 ? totalApplications / stats.totalScholarships : 0
+      
+      // Calculer les candidatures du mois
+      const oneMonthAgo = new Date()
+      oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
+      const monthlyApplications = applications?.filter(app => 
+        new Date(app.created_at!) > oneMonthAgo
+      ).length || 0
+
+      setStats(prev => ({
+        ...prev,
+        totalApplications,
+        pendingApplications,
+        acceptedApplications,
+        rejectedApplications,
+        successRate,
+        avgApplicationsPerScholarship,
+        monthlyApplications
+      }))
     } catch (error) {
-      console.error('Error loading applications:', error)
+      console.error('Error loading applications data:', error)
     }
   }
 
   const loadPerformanceData = async () => {
     try {
-      // Get scholarships with application counts
-      const { data, error } = await supabase
-        .from('scholarships')
-        .select(`
-          *,
-          applications(*)
-        `)
-        .eq('institution_id', user?.id)
-        .eq('is_active', true)
-        .limit(5)
-
-      if (!error && data) {
-        // Sort by application count
-        const sorted = data.sort((a, b) => {
-          const aCount = a.applications?.length || 0
-          const bCount = b.applications?.length || 0
-          return bCount - aCount
-        })
+      const performance: ScholarshipPerformance[] = []
+      
+      for (const scholarship of institutionScholarships) {
+        const applications = institutionApplications.filter(app => app.scholarship_id === scholarship.id)
+        const acceptedCount = applications.filter(app => app.status === 'accepted').length
+        const rejectedCount = applications.filter(app => app.status === 'rejected').length
+        const pendingCount = applications.filter(app => 
+          app.status === 'pending' || app.status === 'under_review'
+        ).length
         
-        setTopPerformingScholarships(sorted)
+        // Calculer le temps de traitement moyen
+        const processedApps = applications.filter(app => app.reviewed_at)
+        const avgProcessingTime = processedApps.length > 0 
+          ? processedApps.reduce((sum, app) => {
+              const submitted = new Date(app.submitted_at || app.created_at!)
+              const reviewed = new Date(app.reviewed_at!)
+              return sum + (reviewed.getTime() - submitted.getTime())
+            }, 0) / processedApps.length / (1000 * 60 * 60 * 24) // en jours
+          : 0
+
+        performance.push({
+          scholarship,
+          applicationsCount: applications.length,
+          acceptedCount,
+          rejectedCount,
+          pendingCount,
+          viewCount: scholarship.view_count || 0,
+          conversionRate: scholarship.view_count ? (applications.length / scholarship.view_count) * 100 : 0,
+          avgProcessingTime
+        })
       }
+      
+      setScholarshipPerformance(performance.sort((a, b) => b.applicationsCount - a.applicationsCount))
     } catch (error) {
       console.error('Error loading performance data:', error)
     }
   }
 
+  const loadAnalyticsData = async () => {
+    try {
+      // Charger les événements d'analyse pour cette institution
+      const { data: events } = await supabase
+        .from('analytics_events')
+        .select('*')
+        .eq('user_id', user?.id)
+        .gte('created_at', getTimeframeDate(selectedTimeframe))
+        .order('created_at', { ascending: false })
+
+      // Calculer les vues hebdomadaires
+      const oneWeekAgo = new Date()
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7)
+      const weeklyViews = events?.filter(e => 
+        e.event_type === 'scholarship_view' && new Date(e.created_at!) > oneWeekAgo
+      ).length || 0
+
+      // Calculer le taux de conversion
+      const totalViews = events?.filter(e => e.event_type === 'scholarship_view').length || 0
+      const conversionRate = totalViews > 0 ? (stats.totalApplications / totalViews) * 100 : 0
+
+      setStats(prev => ({
+        ...prev,
+        weeklyViews,
+        conversionRate
+      }))
+
+      // Activité récente
+      const activity = events?.slice(0, 10).map(event => ({
+        id: event.id,
+        type: event.event_type,
+        description: getEventDescription(event),
+        timestamp: event.created_at,
+        metadata: event.event_data
+      })) || []
+
+      setRecentActivity(activity)
+    } catch (error) {
+      console.error('Error loading analytics data:', error)
+    }
+  }
+
+  const getTimeframeDate = (timeframe: string): string => {
+    const date = new Date()
+    switch (timeframe) {
+      case '7d':
+        date.setDate(date.getDate() - 7)
+        break
+      case '30d':
+        date.setDate(date.getDate() - 30)
+        break
+      case '90d':
+        date.setDate(date.getDate() - 90)
+        break
+      case '1y':
+        date.setFullYear(date.getFullYear() - 1)
+        break
+    }
+    return date.toISOString()
+  }
+
+  const getEventDescription = (event: any): string => {
+    switch (event.event_type) {
+      case 'scholarship_view':
+        return 'Bourse consultée'
+      case 'application_submitted':
+        return 'Nouvelle candidature'
+      case 'application_reviewed':
+        return 'Candidature examinée'
+      case 'scholarship_created':
+        return 'Bourse créée'
+      case 'scholarship_updated':
+        return 'Bourse mise à jour'
+      default:
+        return event.event_type
+    }
+  }
+
+  // Workflows pour la gestion des candidatures
   const updateApplicationStatus = async (applicationId: string, newStatus: string, notes?: string) => {
     try {
-      await invokeEdgeFunction('application-manager', {
-        action: 'update_status',
-        applicationId,
-        statusUpdate: {
+      const { error } = await supabase
+        .from('applications')
+        .update({
           status: newStatus,
-          reviewer_notes: notes
-        }
-      })
-      
+          notes: notes,
+          reviewed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', applicationId)
+
+      if (error) throw error
+
+      // Créer une notification pour l'étudiant
+      const application = institutionApplications.find(app => app.id === applicationId)
+      if (application) {
+        await createNotificationForStudent(application, newStatus)
+      }
+
       toast.success('Statut mis à jour avec succès')
       await loadApplicationsData()
     } catch (error) {
@@ -242,59 +400,780 @@ export default function InstitutionDashboard() {
     }
   }
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'accepted':
-        return <CheckCircle className="w-4 h-4 text-green-600" />
-      case 'rejected':
-        return <XCircle className="w-4 h-4 text-red-600" />
-      case 'under_review':
-        return <Clock className="w-4 h-4 text-yellow-600" />
-      default:
-        return <AlertCircle className="w-4 h-4 text-blue-600" />
+  const createNotificationForStudent = async (application: any, status: string) => {
+    try {
+      const notificationData = {
+        user_id: application.student_id,
+        title: `Mise à jour de votre candidature`,
+        message: `Votre candidature pour "${application.scholarships?.title}" a été ${
+          status === 'accepted' ? 'acceptée' : 
+          status === 'rejected' ? 'refusée' : 
+          'mise à jour'
+        }.`,
+        type: 'application_status',
+        priority: status === 'accepted' ? 'high' : 'medium',
+        related_application_id: application.id,
+        related_scholarship_id: application.scholarship_id
+      }
+
+      await supabase.from('notifications').insert(notificationData)
+    } catch (error) {
+      console.error('Error creating notification:', error)
     }
   }
 
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'accepted':
-        return 'Acceptée'
-      case 'rejected':
-        return 'Refusée'
-      case 'under_review':
-        return 'En examen'
-      default:
-        return 'En attente'
+  const sendBulkNotifications = async (applicationIds: string[], message: string) => {
+    try {
+      const notifications = applicationIds.map(appId => {
+        const application = institutionApplications.find(app => app.id === appId)
+        return {
+          user_id: application?.student_id,
+          title: 'Message de votre institution',
+          message: message,
+          type: 'institution_message',
+          priority: 'medium',
+          related_application_id: appId
+        }
+      }).filter(n => n.user_id)
+
+      await supabase.from('notifications').insert(notifications)
+      toast.success(`${notifications.length} notifications envoyées`)
+    } catch (error) {
+      console.error('Error sending bulk notifications:', error)
+      toast.error('Erreur lors de l\'envoi des notifications')
     }
   }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'accepted':
-        return 'bg-green-100 text-green-800'
-      case 'rejected':
-        return 'bg-red-100 text-red-800'
-      case 'under_review':
-        return 'bg-yellow-100 text-yellow-800'
-      default:
-        return 'bg-blue-100 text-blue-800'
+  const publishScholarshipResults = async (scholarshipId: string) => {
+    try {
+      const applications = institutionApplications.filter(app => app.scholarship_id === scholarshipId)
+      const acceptedApps = applications.filter(app => app.status === 'accepted')
+      const rejectedApps = applications.filter(app => app.status === 'rejected')
+
+      // Envoyer des notifications aux candidats acceptés
+      for (const app of acceptedApps) {
+        await supabase.from('notifications').insert({
+          user_id: app.student_id,
+          title: '🎉 Félicitations ! Candidature acceptée',
+          message: `Votre candidature pour "${app.scholarships?.title}" a été acceptée. Consultez votre espace pour les prochaines étapes.`,
+          type: 'application_accepted',
+          priority: 'high',
+          related_application_id: app.id,
+          related_scholarship_id: scholarshipId,
+          action_url: `/applications/${app.id}`
+        })
+      }
+
+      // Envoyer des notifications aux candidats refusés
+      for (const app of rejectedApps) {
+        await supabase.from('notifications').insert({
+          user_id: app.student_id,
+          title: 'Résultat de votre candidature',
+          message: `Nous vous remercions pour votre candidature à "${app.scholarships?.title}". Malheureusement, nous ne pouvons pas donner suite à votre demande cette fois-ci.`,
+          type: 'application_rejected',
+          priority: 'medium',
+          related_application_id: app.id,
+          related_scholarship_id: scholarshipId
+        })
+      }
+
+      toast.success(`Résultats publiés : ${acceptedApps.length} acceptés, ${rejectedApps.length} refusés`)
+    } catch (error) {
+      console.error('Error publishing results:', error)
+      toast.error('Erreur lors de la publication des résultats')
     }
   }
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('fr-FR', {
-      style: 'currency',
-      currency: 'EUR'
-    }).format(amount)
-  }
+  // Données pour les graphiques
+  const chartData = useMemo(() => {
+    if (!institutionApplications.length) return {
+      applicationsByMonth: [],
+      applicationsByStatus: [],
+      scholarshipsByPerformance: [],
+      applicationTrends: []
+    }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('fr-FR', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    })
-  }
+    // Applications par mois (6 derniers mois)
+    const monthlyData = []
+    for (let i = 5; i >= 0; i--) {
+      const date = new Date()
+      date.setMonth(date.getMonth() - i)
+      const monthKey = date.toISOString().slice(0, 7)
+      const count = institutionApplications.filter(app => 
+        app.created_at?.startsWith(monthKey)
+      ).length
+      
+      monthlyData.push({
+        name: date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }),
+        value: count
+      })
+    }
+
+    // Applications par statut
+    const statusData = [
+      { name: 'En attente', value: stats.pendingApplications },
+      { name: 'Acceptées', value: stats.acceptedApplications },
+      { name: 'Refusées', value: stats.rejectedApplications }
+    ].filter(item => item.value > 0)
+
+    // Performance des bourses (top 10)
+    const performanceData = scholarshipPerformance.slice(0, 10).map(perf => ({
+      name: perf.scholarship.title.substring(0, 20) + (perf.scholarship.title.length > 20 ? '...' : ''),
+      value: perf.applicationsCount
+    }))
+
+    // Tendances des candidatures (7 derniers jours)
+    const trendData = []
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date()
+      date.setDate(date.getDate() - i)
+      const dayKey = date.toISOString().slice(0, 10)
+      const count = institutionApplications.filter(app => 
+        app.created_at?.startsWith(dayKey)
+      ).length
+      
+      trendData.push({
+        name: date.toLocaleDateString('fr-FR', { weekday: 'short' }),
+        value: count
+      })
+    }
+
+    return {
+      applicationsByMonth: monthlyData,
+      applicationsByStatus: statusData,
+      scholarshipsByPerformance: performanceData,
+      applicationTrends: trendData
+    }
+  }, [institutionApplications, scholarshipPerformance, stats])
+
+  // Colonnes pour le tableau des candidatures
+  const applicationColumns = [
+    {
+      key: 'profiles' as keyof Application,
+      label: 'Candidat',
+      render: (value: any, row: Application) => (
+        <div className="flex items-center space-x-3">
+          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+            <span className="text-blue-600 font-medium text-sm">
+              {value?.full_name?.charAt(0) || 'U'}
+            </span>
+          </div>
+          <div>
+            <div className="font-medium text-gray-900">{value?.full_name || 'Nom inconnu'}</div>
+            <div className="text-sm text-gray-500">{value?.email}</div>
+          </div>
+        </div>
+      )
+    },
+    {
+      key: 'scholarships' as keyof Application,
+      label: 'Bourse',
+      render: (value: any) => (
+        <div>
+          <div className="font-medium text-gray-900">{value?.title}</div>
+          <div className="text-sm text-green-600">
+            {value?.amount ? `${value.amount.toLocaleString()}€` : 'Montant non spécifié'}
+          </div>
+        </div>
+      )
+    },
+    {
+      key: 'status' as keyof Application,
+      label: 'Statut',
+      render: (value: string | null) => {
+        const statusConfig = {
+          'pending': { color: 'bg-yellow-100 text-yellow-800', icon: Clock },
+          'under_review': { color: 'bg-blue-100 text-blue-800', icon: Eye },
+          'accepted': { color: 'bg-green-100 text-green-800', icon: CheckCircle },
+          'rejected': { color: 'bg-red-100 text-red-800', icon: XCircle }
+        }
+        const config = statusConfig[value as keyof typeof statusConfig] || statusConfig.pending
+        const IconComponent = config.icon
+        
+        return (
+          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${config.color}`}>
+            <IconComponent className="w-3 h-3 mr-1" />
+            {value === 'pending' ? 'En attente' :
+             value === 'under_review' ? 'En examen' :
+             value === 'accepted' ? 'Acceptée' :
+             value === 'rejected' ? 'Refusée' : value}
+          </span>
+        )
+      }
+    },
+    {
+      key: 'created_at' as keyof Application,
+      label: 'Date de candidature',
+      sortable: true,
+      render: (value: string | null) => (
+        value ? new Date(value).toLocaleDateString('fr-FR') : '-'
+      )
+    },
+    {
+      key: 'actions' as keyof Application,
+      label: 'Actions',
+      render: (_, row: Application) => (
+        <div className="flex items-center space-x-2">
+          {row.status === 'pending' && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => updateApplicationStatus(row.id, 'accepted')}
+                className="text-green-600 hover:text-green-700"
+              >
+                <CheckCircle className="w-4 h-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => updateApplicationStatus(row.id, 'rejected')}
+                className="text-red-600 hover:text-red-700"
+              >
+                <XCircle className="w-4 h-4" />
+              </Button>
+            </>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => window.open(`/application/${row.id}`, '_blank')}
+          >
+            <Eye className="w-4 h-4" />
+          </Button>
+        </div>
+      )
+    }
+  ]
+
+  // Colonnes pour le tableau des bourses
+  const scholarshipColumns = [
+    {
+      key: 'title' as keyof Scholarship,
+      label: 'Titre',
+      sortable: true,
+      render: (value: string, row: Scholarship) => (
+        <div className="space-y-1">
+          <div className="font-medium text-gray-900">{value}</div>
+          <div className="flex items-center space-x-2">
+            {row.is_featured && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                <Star className="w-3 h-3 mr-1" />
+                Recommandée
+              </span>
+            )}
+            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+              row.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+            }`}>
+              {row.is_active ? 'Active' : 'Inactive'}
+            </span>
+          </div>
+        </div>
+      )
+    },
+    {
+      key: 'amount' as keyof Scholarship,
+      label: 'Montant',
+      sortable: true,
+      render: (value: number | null, row: Scholarship) => (
+        <div className="text-right">
+          {value ? (
+            <div className="font-semibold text-green-600">
+              {value.toLocaleString()}€
+            </div>
+          ) : (
+            <span className="text-gray-400">Non spécifié</span>
+          )}
+        </div>
+      )
+    },
+    {
+      key: 'application_deadline' as keyof Scholarship,
+      label: 'Date limite',
+      sortable: true,
+      render: (value: string) => {
+        const deadline = new Date(value)
+        const now = new Date()
+        const isExpired = deadline < now
+        const isExpiringSoon = (deadline.getTime() - now.getTime()) < (7 * 24 * 60 * 60 * 1000)
+        
+        return (
+          <div className={`text-sm ${
+            isExpired ? 'text-red-600' : 
+            isExpiringSoon ? 'text-orange-600' : 
+            'text-gray-600'
+          }`}>
+            {deadline.toLocaleDateString('fr-FR')}
+            {isExpired && <div className="text-xs">Expirée</div>}
+            {isExpiringSoon && !isExpired && <div className="text-xs">Bientôt</div>}
+          </div>
+        )
+      }
+    },
+    {
+      key: 'application_count' as keyof Scholarship,
+      label: 'Candidatures',
+      sortable: true,
+      render: (value: number | null, row: Scholarship) => {
+        const appCount = institutionApplications.filter(app => app.scholarship_id === row.id).length
+        return (
+          <div className="text-center">
+            <span className="font-medium">{appCount}</span>
+          </div>
+        )
+      }
+    },
+    {
+      key: 'actions' as keyof Scholarship,
+      label: 'Actions',
+      render: (_, row: Scholarship) => (
+        <div className="flex items-center space-x-2">
+          <Link to={`/scholarship/${row.id}`}>
+            <Button size="sm" variant="ghost">
+              <Eye className="w-4 h-4" />
+            </Button>
+          </Link>
+          <Link to={`/scholarship/${row.id}/edit`}>
+            <Button size="sm" variant="ghost">
+              <Edit className="w-4 h-4" />
+            </Button>
+          </Link>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => publishScholarshipResults(row.id)}
+            disabled={!institutionApplications.some(app => 
+              app.scholarship_id === row.id && app.status !== 'pending'
+            )}
+          >
+            <Send className="w-4 h-4" />
+          </Button>
+        </div>
+      )
+    }
+  ]
+
+  const renderOverviewTab = () => (
+    <div className="space-y-6">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <StatCard
+          title="Bourses actives"
+          value={stats.activeScholarships}
+          icon={Award}
+          color="blue"
+          subtitle={`sur ${stats.totalScholarships} total`}
+        />
+        <StatCard
+          title="Candidatures reçues"
+          value={stats.totalApplications}
+          icon={FileText}
+          color="green"
+          subtitle={`${stats.monthlyApplications} ce mois`}
+        />
+        <StatCard
+          title="Taux d'acceptation"
+          value={`${stats.successRate.toFixed(1)}%`}
+          icon={TrendingUp}
+          color="purple"
+          subtitle={`${stats.acceptedApplications} acceptées`}
+        />
+        <StatCard
+          title="Budget total"
+          value={`${(stats.totalFunding / 1000).toFixed(0)}K€`}
+          icon={DollarSign}
+          color="orange"
+          subtitle="Financement disponible"
+        />
+      </div>
+
+      {/* Charts Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Candidatures par mois</h3>
+          <Chart
+            type="bar"
+            data={chartData.applicationsByMonth}
+            height={300}
+            colors={['#3B82F6']}
+          />
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Répartition par statut</h3>
+          <Chart
+            type="pie"
+            data={chartData.applicationsByStatus}
+            height={300}
+            colors={['#F59E0B', '#10B981', '#EF4444']}
+          />
+        </Card>
+      </div>
+
+      {/* Recent Activity */}
+      <Card className="p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Activité récente</h3>
+        <div className="space-y-3">
+          {recentActivity.slice(0, 8).map((activity) => (
+            <div key={activity.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center space-x-3">
+                <Activity className="w-4 h-4 text-blue-500" />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{activity.description}</p>
+                  <p className="text-xs text-gray-500">
+                    {new Date(activity.timestamp).toLocaleString('fr-FR')}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+          {recentActivity.length === 0 && (
+            <div className="text-center py-6">
+              <Activity className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+              <p className="text-gray-500">Aucune activité récente</p>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  )
+
+  const renderScholarshipsTab = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold text-gray-900">Gestion des bourses</h2>
+        <div className="flex items-center space-x-2">
+          <Link to="/scholarships/create">
+            <Button icon={Plus}>
+              Nouvelle bourse
+            </Button>
+          </Link>
+          <Button variant="outline" icon={Download}>
+            Exporter
+          </Button>
+        </div>
+      </div>
+
+      {/* Performance des bourses */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Top bourses (candidatures)</h3>
+          <Chart
+            type="bar"
+            data={chartData.scholarshipsByPerformance}
+            height={250}
+            colors={['#10B981']}
+          />
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Performance détaillée</h3>
+          <div className="space-y-3">
+            {scholarshipPerformance.slice(0, 5).map((perf, index) => (
+              <div key={perf.scholarship.id} className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm font-medium text-gray-600">#{index + 1}</span>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 truncate max-w-[150px]">
+                      {perf.scholarship.title}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {perf.applicationsCount} candidatures
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-medium text-green-600">
+                    {perf.conversionRate.toFixed(1)}%
+                  </p>
+                  <p className="text-xs text-gray-500">conversion</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions rapides</h3>
+          <div className="space-y-3">
+            <Button 
+              variant="outline" 
+              className="w-full justify-start"
+              onClick={() => {
+                const pendingApps = institutionApplications.filter(app => app.status === 'pending')
+                if (pendingApps.length > 0) {
+                  const message = prompt('Message à envoyer aux candidats en attente:')
+                  if (message) {
+                    sendBulkNotifications(pendingApps.map(app => app.id), message)
+                  }
+                }
+              }}
+            >
+              <MessageSquare className="w-4 h-4 mr-2" />
+              Notifier candidats en attente ({stats.pendingApplications})
+            </Button>
+            
+            <Button 
+              variant="outline" 
+              className="w-full justify-start"
+              onClick={() => {
+                const expiredScholarships = institutionScholarships.filter(s => 
+                  new Date(s.application_deadline) < new Date() && s.is_active
+                )
+                if (expiredScholarships.length > 0) {
+                  toast.info(`${expiredScholarships.length} bourses expirées à archiver`)
+                }
+              }}
+            >
+              <Archive className="w-4 h-4 mr-2" />
+              Archiver bourses expirées
+            </Button>
+            
+            <Button 
+              variant="outline" 
+              className="w-full justify-start"
+              onClick={() => window.open('/analytics', '_blank')}
+            >
+              <BarChart3 className="w-4 h-4 mr-2" />
+              Analytics détaillées
+            </Button>
+          </div>
+        </Card>
+      </div>
+
+      {/* Table des bourses */}
+      <DataTable
+        data={institutionScholarships}
+        columns={scholarshipColumns}
+        searchPlaceholder="Rechercher une bourse..."
+        isLoading={loading}
+        emptyMessage="Aucune bourse créée"
+      />
+    </div>
+  )
+
+  const renderApplicationsTab = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold text-gray-900">Gestion des candidatures</h2>
+        <div className="flex items-center space-x-2">
+          <Button 
+            variant="outline" 
+            icon={UserCheck}
+            onClick={() => {
+              const acceptedApps = institutionApplications.filter(app => app.status === 'accepted')
+              if (acceptedApps.length > 0) {
+                const message = prompt('Message de félicitations aux candidats acceptés:')
+                if (message) {
+                  sendBulkNotifications(acceptedApps.map(app => app.id), message)
+                }
+              }
+            }}
+          >
+            Notifier acceptés ({stats.acceptedApplications})
+          </Button>
+          <Button variant="outline" icon={Download}>
+            Exporter candidatures
+          </Button>
+        </div>
+      </div>
+
+      {/* Statistiques des candidatures */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600">En attente</p>
+              <p className="text-2xl font-bold text-yellow-600">{stats.pendingApplications}</p>
+            </div>
+            <Clock className="w-8 h-8 text-yellow-600" />
+          </div>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600">Acceptées</p>
+              <p className="text-2xl font-bold text-green-600">{stats.acceptedApplications}</p>
+            </div>
+            <CheckCircle className="w-8 h-8 text-green-600" />
+          </div>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600">Refusées</p>
+              <p className="text-2xl font-bold text-red-600">{stats.rejectedApplications}</p>
+            </div>
+            <XCircle className="w-8 h-8 text-red-600" />
+          </div>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600">Taux de conversion</p>
+              <p className="text-2xl font-bold text-blue-600">{stats.conversionRate.toFixed(1)}%</p>
+            </div>
+            <Target className="w-8 h-8 text-blue-600" />
+          </div>
+        </Card>
+      </div>
+
+      {/* Tendances des candidatures */}
+      <Card className="p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Tendances des candidatures (7 derniers jours)</h3>
+        <Chart
+          type="bar"
+          data={chartData.applicationTrends}
+          height={200}
+          colors={['#3B82F6']}
+        />
+      </Card>
+
+      {/* Table des candidatures */}
+      <DataTable
+        data={institutionApplications}
+        columns={applicationColumns}
+        searchPlaceholder="Rechercher une candidature..."
+        isLoading={loading}
+        emptyMessage="Aucune candidature reçue"
+      />
+    </div>
+  )
+
+  const renderAnalyticsTab = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold text-gray-900">Analytics avancées</h2>
+        <div className="flex items-center space-x-2">
+          <select
+            value={selectedTimeframe}
+            onChange={(e) => setSelectedTimeframe(e.target.value)}
+            className="border border-gray-300 rounded-md px-3 py-2 text-sm"
+          >
+            <option value="7d">7 derniers jours</option>
+            <option value="30d">30 derniers jours</option>
+            <option value="90d">90 derniers jours</option>
+            <option value="1y">Cette année</option>
+          </select>
+          <Button variant="outline" icon={RefreshCw} onClick={loadDashboardData}>
+            Actualiser
+          </Button>
+        </div>
+      </div>
+
+      {/* Métriques avancées */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Engagement des candidats</h3>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Vues hebdomadaires</span>
+              <span className="font-semibold">{stats.weeklyViews}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Taux de conversion</span>
+              <span className="font-semibold text-green-600">{stats.conversionRate.toFixed(1)}%</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Candidatures/bourse</span>
+              <span className="font-semibold">{stats.avgApplicationsPerScholarship.toFixed(1)}</span>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Performance temporelle</h3>
+          <div className="space-y-4">
+            {scholarshipPerformance.slice(0, 3).map((perf, index) => (
+              <div key={perf.scholarship.id} className="flex justify-between items-center">
+                <div>
+                  <p className="text-sm font-medium text-gray-900 truncate max-w-[120px]">
+                    {perf.scholarship.title}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Traitement: {perf.avgProcessingTime.toFixed(1)} jours
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-blue-600">
+                    {perf.applicationsCount}
+                  </p>
+                  <p className="text-xs text-gray-500">candidatures</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions recommandées</h3>
+          <div className="space-y-3">
+            {stats.pendingApplications > 0 && (
+              <div className="p-3 bg-yellow-50 rounded-lg">
+                <p className="text-sm font-medium text-yellow-800">
+                  {stats.pendingApplications} candidatures en attente
+                </p>
+                <p className="text-xs text-yellow-600">Action requise</p>
+              </div>
+            )}
+            {institutionScholarships.filter(s => 
+              new Date(s.application_deadline) < new Date() && s.is_active
+            ).length > 0 && (
+              <div className="p-3 bg-red-50 rounded-lg">
+                <p className="text-sm font-medium text-red-800">
+                  Bourses expirées à archiver
+                </p>
+                <p className="text-xs text-red-600">Maintenance requise</p>
+              </div>
+            )}
+            {stats.successRate < 10 && stats.totalApplications > 10 && (
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <p className="text-sm font-medium text-blue-800">
+                  Taux d'acceptation faible
+                </p>
+                <p className="text-xs text-blue-600">Révision des critères suggérée</p>
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Graphiques détaillés */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Évolution des candidatures</h3>
+          <Chart
+            type="bar"
+            data={chartData.applicationTrends}
+            height={300}
+            colors={['#6366F1']}
+          />
+        </Card>
+
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Répartition géographique</h3>
+          <div className="space-y-3">
+            {/* Analyse géographique des candidats */}
+            {(() => {
+              const countryStats = institutionApplications.reduce((acc, app) => {
+                // Note: Nous aurions besoin d'une jointure avec les profils étudiants pour obtenir la nationalité
+                const country = 'France' // Placeholder - à remplacer par les vraies données
+                acc[country] = (acc[country] || 0) + 1
+                return acc
+              }, {} as Record<string, number>)
+
+              return Object.entries(countryStats).slice(0, 5).map(([country, count]) => (
+                <div key={country} className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">{country}</span>
+                  <span className="font-semibold">{count}</span>
+                </div>
+              ))
+            })()}
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
 
   if (loading) {
     return (
@@ -311,341 +1190,58 @@ export default function InstitutionDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header avec indicateur temps réel */}
       <div className="bg-gradient-to-r from-blue-600 to-green-600 rounded-xl p-6 text-white">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold mb-2">
-              Tableau de bord - {institutionProfile?.institution_name || profile?.full_name} 🏢
+            <h1 className="text-2xl font-bold mb-2 flex items-center gap-2">
+              <Building2 className="w-6 h-6" />
+              {institutionProfile?.institution_name || profile?.full_name}
             </h1>
             <p className="text-blue-100">
-              Gestion de vos programmes de bourses et candidatures
+              Tableau de bord institution - Gestion complète de vos programmes
             </p>
           </div>
           <div className="text-right">
-            <p className="text-blue-100 text-sm">Total des fonds</p>
-            <p className="text-2xl font-bold">{formatCurrency(stats.totalFunding)}</p>
+            <RealTimeIndicator 
+              isConnected={isConnected} 
+              lastUpdate={lastUpdate}
+              className="mb-2"
+            />
+            <p className="text-blue-100 text-sm">Budget total</p>
+            <p className="text-2xl font-bold">{(stats.totalFunding / 1000).toFixed(0)}K€</p>
           </div>
         </div>
       </div>
 
-      {/* Key Performance Indicators */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-600">Bourses actives</p>
-              <p className="text-2xl font-bold text-gray-900">{stats.activeScholarships}</p>
-              <p className="text-xs text-gray-500">sur {stats.totalScholarships} total</p>
-            </div>
-            <Award className="w-8 h-8 text-blue-600" />
-          </div>
-        </Card>
-        
-        <Card className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-600">Candidatures reçues</p>
-              <p className="text-2xl font-bold text-gray-900">{stats.totalApplications}</p>
-              <p className="text-xs text-gray-500">{stats.pendingApplications} en attente</p>
-            </div>
-            <FileText className="w-8 h-8 text-green-600" />
-          </div>
-        </Card>
-        
-        <Card className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-600">Taux d'acceptation</p>
-              <p className="text-2xl font-bold text-gray-900">{stats.successRate.toFixed(1)}%</p>
-              <p className="text-xs text-gray-500">{stats.acceptedApplications} acceptées</p>
-            </div>
-            <TrendingUp className="w-8 h-8 text-orange-600" />
-          </div>
-        </Card>
-        
-        <Card className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-600">Notifications</p>
-              <p className="text-2xl font-bold text-gray-900">{unreadCount}</p>
-              <p className="text-xs text-gray-500">non lues</p>
-            </div>
-            <Bell className="w-8 h-8 text-purple-600" />
-          </div>
-        </Card>
+      {/* Navigation des onglets */}
+      <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+        {[
+          { key: 'overview', label: 'Vue d\'ensemble', icon: BarChart3 },
+          { key: 'scholarships', label: 'Bourses', icon: Award },
+          { key: 'applications', label: 'Candidatures', icon: FileText },
+          { key: 'analytics', label: 'Analytics', icon: TrendingUp }
+        ].map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setSelectedView(key as any)}
+            className={`flex-1 flex items-center justify-center space-x-2 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+              selectedView === key
+                ? 'bg-white text-blue-600 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <Icon className="w-4 h-4" />
+            <span>{label}</span>
+          </button>
+        ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Applications */}
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold flex items-center gap-2">
-              <Users className="w-5 h-5 text-blue-600" />
-              Candidatures récentes
-            </h2>
-            <Link to="/applications">
-              <Button variant="outline" size="sm">
-                Voir tout
-                <Eye className="w-4 h-4 ml-1" />
-              </Button>
-            </Link>
-          </div>
-          
-          <div className="space-y-3">
-            {recentApplications.length > 0 ? (
-              recentApplications.map((application) => (
-                <div key={application.id} className="p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <h3 className="font-medium text-gray-900">
-                        {application.profiles?.full_name || 'Candidat anonyme'}
-                      </h3>
-                      <p className="text-sm text-gray-600">
-                        {application.scholarships?.title}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {formatDate(application.created_at)}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(application.status)}`}>
-                        {getStatusText(application.status)}
-                      </span>
-                      {application.status === 'pending' && (
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => updateApplicationStatus(application.id, 'accepted')}
-                            className="p-1 h-6 w-6"
-                          >
-                            <CheckCircle className="w-3 h-3 text-green-600" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => updateApplicationStatus(application.id, 'rejected')}
-                            className="p-1 h-6 w-6"
-                          >
-                            <XCircle className="w-3 h-3 text-red-600" />
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="text-center py-8">
-                <Users className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-gray-500 mb-4">Aucune candidature reçue pour le moment</p>
-                <Link to="/scholarships/create">
-                  <Button>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Créer une bourse
-                  </Button>
-                </Link>
-              </div>
-            )}
-          </div>
-        </Card>
-
-        {/* Scholarship Management */}
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold flex items-center gap-2">
-              <Award className="w-5 h-5 text-yellow-600" />
-              Mes bourses
-            </h2>
-            <Link to="/scholarships/create">
-              <Button size="sm">
-                <Plus className="w-4 h-4 mr-1" />
-                Nouvelle bourse
-              </Button>
-            </Link>
-          </div>
-          
-          <div className="space-y-3">
-            {recentScholarships.slice(0, 4).map((scholarship) => (
-              <div key={scholarship.id} className="p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="font-medium text-gray-900 mb-1">
-                      {scholarship.title}
-                    </h3>
-                    <div className="flex items-center gap-4 text-sm text-gray-600">
-                      <span className="flex items-center gap-1">
-                        <DollarSign className="w-4 h-4" />
-                        {formatCurrency(scholarship.amount)}
-                      </span>
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        scholarship.is_active 
-                          ? 'bg-green-100 text-green-800' 
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {scholarship.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Deadline: {formatDate(scholarship.application_deadline)}
-                    </p>
-                  </div>
-                  <div className="flex gap-1">
-                    <Link to={`/scholarship/${scholarship.id}`}>
-                      <Button size="sm" variant="outline">
-                        <Eye className="w-3 h-3" />
-                      </Button>
-                    </Link>
-                    <Link to={`/scholarship/${scholarship.id}/edit`}>
-                      <Button size="sm" variant="outline">
-                        <Edit className="w-3 h-3" />
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            ))}
-            
-            {recentScholarships.length === 0 && (
-              <div className="text-center py-8">
-                <Award className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-gray-500 mb-4">Aucune bourse créée pour le moment</p>
-                <Link to="/scholarships/create">
-                  <Button>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Créer ma première bourse
-                  </Button>
-                </Link>
-              </div>
-            )}
-          </div>
-        </Card>
-      </div>
-
-      {/* Analytics & Quick Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Performance Analytics */}
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-green-600" />
-              Bourses les plus populaires
-            </h2>
-          </div>
-          
-          <div className="space-y-3">
-            {topPerformingScholarships.map((scholarship, index) => {
-              const applicationsCount = scholarship.applications_count || 0
-              return (
-                <div key={scholarship.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                      index === 0 ? 'bg-yellow-500 text-white' :
-                      index === 1 ? 'bg-gray-400 text-white' :
-                      index === 2 ? 'bg-orange-500 text-white' :
-                      'bg-blue-100 text-blue-800'
-                    }`}>
-                      {index + 1}
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-gray-900">{scholarship.title}</h3>
-                      <p className="text-sm text-gray-600">{formatCurrency(scholarship.amount)}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-medium text-gray-900">{applicationsCount}</p>
-                    <p className="text-xs text-gray-500">candidatures</p>
-                  </div>
-                </div>
-              )
-            })}
-            
-            {topPerformingScholarships.length === 0 && (
-              <div className="text-center py-6">
-                <BarChart3 className="w-10 h-10 text-gray-400 mx-auto mb-2" />
-                <p className="text-gray-500">Aucune donnée de performance disponible</p>
-              </div>
-            )}
-          </div>
-        </Card>
-
-        {/* Quick Actions & Institution Info */}
-        <Card className="p-6">
-          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-            <Target className="w-5 h-5 text-blue-600" />
-            Actions rapides
-          </h2>
-          
-          <div className="grid grid-cols-2 gap-3 mb-6">
-            <Link to="/ai-recommendations/candidates">
-              <Button className="w-full" variant="primary">
-                <Users className="w-4 h-4 mr-2" />
-                Candidats IA
-              </Button>
-            </Link>
-            
-            <Link to="/applications">
-              <Button className="w-full" variant="outline">
-                <FileText className="w-4 h-4 mr-2" />
-                Candidatures
-              </Button>
-            </Link>
-            
-            <Link to="/scholarships/create">
-              <Button className="w-full" variant="outline">
-                <Plus className="w-4 h-4 mr-2" />
-                Nouvelle bourse
-              </Button>
-            </Link>
-            
-            <Link to="/profile">
-              <Button className="w-full" variant="outline">
-                <Settings className="w-4 h-4 mr-2" />
-                Paramètres
-              </Button>
-            </Link>
-          </div>
-
-          {/* Institution Profile Summary */}
-          {institutionProfile && (
-            <div className="border-t pt-4">
-              <h3 className="font-medium text-gray-900 mb-3">Profil institution</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <Building2 className="w-4 h-4 text-gray-500" />
-                  <span className="text-gray-600">{institutionProfile.institution_type}</span>
-                </div>
-                {institutionProfile.country && (
-                  <div className="flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-gray-500" />
-                    <span className="text-gray-600">{institutionProfile.country}</span>
-                  </div>
-                )}
-                {institutionProfile.website && (
-                  <div className="flex items-center gap-2">
-                    <Globe className="w-4 h-4 text-gray-500" />
-                    <a 
-                      href={institutionProfile.website} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-700"
-                    >
-                      Site web
-                    </a>
-                  </div>
-                )}
-                {institutionProfile.contact_email && (
-                  <div className="flex items-center gap-2">
-                    <Mail className="w-4 h-4 text-gray-500" />
-                    <span className="text-gray-600">{institutionProfile.contact_email}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </Card>
-      </div>
+      {/* Contenu des onglets */}
+      {selectedView === 'overview' && renderOverviewTab()}
+      {selectedView === 'scholarships' && renderScholarshipsTab()}
+      {selectedView === 'applications' && renderApplicationsTab()}
+      {selectedView === 'analytics' && renderAnalyticsTab()}
     </div>
   )
 }
