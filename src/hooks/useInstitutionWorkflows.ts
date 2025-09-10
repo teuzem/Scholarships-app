@@ -3,6 +3,17 @@ import { supabase, invokeEdgeFunction } from '@/lib/supabase'
 import { useAuth } from './useAuth'
 import toast from 'react-hot-toast'
 
+// Type for application with relations used in notifications
+type ApplicationWithRelationsForNotification = Tables<'applications'> & {
+  scholarships: {
+    title: string
+  } | null
+  profiles: {
+    full_name: string
+    email: string
+  } | null
+}
+
 // Hook pour la création de bourses
 export function useCreateScholarship() {
   const queryClient = useQueryClient()
@@ -93,7 +104,8 @@ export function useManageApplications() {
       status: string
       notes?: string 
     }) => {
-      const { data, error } = await supabase
+      // First, update the application
+      const { error: updateError } = await supabase
         .from('applications')
         .update({
           status,
@@ -102,20 +114,29 @@ export function useManageApplications() {
           updated_at: new Date().toISOString()
         })
         .eq('id', applicationId)
+
+      if (updateError) throw updateError
+
+      // Then, fetch the updated application with relations
+      const { data, error } = await supabase
+        .from('applications')
         .select(`
           *,
           scholarships(title),
           profiles(full_name, email)
         `)
+        .eq('id', applicationId)
         .single()
 
       if (error) throw error
 
+      const typedData = data as ApplicationWithRelationsForNotification
+
       // Créer une notification pour l'étudiant
       await supabase.from('notifications').insert({
-        user_id: data.student_id,
+        user_id: typedData.student_id,
         title: `Mise à jour de votre candidature`,
-        message: `Votre candidature pour "${data.scholarships?.title}" a été ${
+        message: `Votre candidature pour "${typedData.scholarships?.title}" a été ${
           status === 'accepted' ? 'acceptée' : 
           status === 'rejected' ? 'refusée' : 
           'mise à jour'
@@ -123,10 +144,10 @@ export function useManageApplications() {
         type: 'application_status',
         priority: status === 'accepted' ? 'high' : 'medium',
         related_application_id: applicationId,
-        related_scholarship_id: data.scholarship_id
+        related_scholarship_id: typedData.scholarship_id
       })
 
-      return data
+      return typedData
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })

@@ -113,7 +113,7 @@ export default function InstitutionDashboard() {
   })
   
   const [institutionScholarships, setInstitutionScholarships] = useState<Scholarship[]>([])
-  const [institutionApplications, setInstitutionApplications] = useState<Application[]>([])
+  const [institutionApplications, setInstitutionApplications] = useState<ApplicationWithRelationsForDashboard[]>([])
   const [scholarshipPerformance, setScholarshipPerformance] = useState<ScholarshipPerformance[]>([])
   const [recentActivity, setRecentActivity] = useState<any[]>([])
 
@@ -219,7 +219,9 @@ export default function InstitutionDashboard() {
 
       if (error) throw error
 
-      setInstitutionApplications(applications || [])
+      // Cast the applications to the correct type
+      const typedApplications = (applications || []) as ApplicationWithRelationsForDashboard[]
+      setInstitutionApplications(typedApplications)
       
       // Calculer les statistiques des candidatures
       const totalApplications = applications?.length || 0
