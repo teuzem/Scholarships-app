@@ -32,23 +32,23 @@ interface ApplicationReviewModalProps {
 interface ApplicationDetails {
   id: string
   status: string
-  notes?: string
-  application_data?: any
-  submitted_at: string
+  notes?: string | null
+  application_data?: any | null
+  submitted_at: string | null
   created_at: string
   scholarship: {
     title: string
-    amount: number
-    currency: string
-    study_level: string
-    study_fields: string[]
-  }
+    amount: number | null
+    currency: string | null
+    study_level: string | null
+    study_fields: string[] | null
+  } | null
   student: {
     full_name: string
     email: string
-    phone?: string
-    bio?: string
-  }
+    phone?: string | null
+    bio?: string | null
+  } | null
   studentProfile: {
     field_of_study?: string
     current_education_level?: string
@@ -57,7 +57,7 @@ interface ApplicationDetails {
     languages_spoken?: string[]
     academic_achievements?: string
     work_experience?: string
-  }
+  } | null
 }
 
 export default function ApplicationReviewModal({ 
@@ -105,8 +105,8 @@ export default function ApplicationReviewModal({
 
       setApplication({
         ...appData,
-        student: appData.profiles,
-        scholarship: appData.scholarships,
+        student: appData.profiles || null,
+        scholarship: appData.scholarships || null,
         studentProfile: studentProfile || {}
       })
       
@@ -200,11 +200,11 @@ export default function ApplicationReviewModal({
     )
   }
 
-  if (!application) {
+  if (!application || !application.student || !application.scholarship) {
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <Card className="p-8 text-center">
-          <p className="text-red-600">Erreur lors du chargement de la candidature</p>
+          <p className="text-red-600">Erreur lors du chargement de la candidature ou données manquantes</p>
           <Button onClick={onClose} className="mt-4">Fermer</Button>
         </Card>
       </div>
@@ -245,19 +245,19 @@ export default function ApplicationReviewModal({
                   <div className="flex items-center space-x-4">
                     <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
                       <span className="text-blue-600 font-bold text-lg">
-                        {application.student.full_name.charAt(0)}
+                        {application.student?.full_name?.charAt(0) || '?'}
                       </span>
                     </div>
                     <div>
                       <h4 className="text-xl font-semibold text-gray-900">
-                        {application.student.full_name}
+                        {application.student?.full_name || 'Nom non disponible'}
                       </h4>
                       <div className="flex items-center space-x-4 text-sm text-gray-600">
                         <span className="flex items-center gap-1">
                           <Mail className="w-4 h-4" />
-                          {application.student.email}
+                          {application.student?.email || 'Email non disponible'}
                         </span>
-                        {application.student.phone && (
+                        {application.student?.phone && (
                           <span className="flex items-center gap-1">
                             <Phone className="w-4 h-4" />
                             {application.student.phone}
@@ -267,7 +267,7 @@ export default function ApplicationReviewModal({
                     </div>
                   </div>
 
-                  {application.student.bio && (
+                  {application.student?.bio && (
                     <div>
                       <h5 className="font-medium text-gray-900 mb-2">Biographie</h5>
                       <p className="text-gray-600 text-sm leading-relaxed">{application.student.bio}</p>
@@ -286,28 +286,28 @@ export default function ApplicationReviewModal({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="text-sm font-medium text-gray-500">Domaine d'étude</label>
-                    <p className="text-gray-900">{application.studentProfile.field_of_study || 'Non spécifié'}</p>
+                    <p className="text-gray-900">{application.studentProfile?.field_of_study || 'Non spécifié'}</p>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-gray-500">Niveau actuel</label>
-                    <p className="text-gray-900">{application.studentProfile.current_education_level || 'Non spécifié'}</p>
+                    <p className="text-gray-900">{application.studentProfile?.current_education_level || 'Non spécifié'}</p>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-gray-500">GPA</label>
                     <p className="text-gray-900 flex items-center gap-2">
-                      {application.studentProfile.gpa || 'Non spécifié'}
-                      {application.studentProfile.gpa && application.studentProfile.gpa >= 3.5 && (
+                      {application.studentProfile?.gpa || 'Non spécifié'}
+                      {application.studentProfile?.gpa && application.studentProfile.gpa >= 3.5 && (
                         <Star className="w-4 h-4 text-yellow-500" />
                       )}
                     </p>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-gray-500">Nationalité</label>
-                    <p className="text-gray-900">{application.studentProfile.nationality || 'Non spécifiée'}</p>
+                    <p className="text-gray-900">{application.studentProfile?.nationality || 'Non spécifiée'}</p>
                   </div>
                 </div>
 
-                {application.studentProfile.languages_spoken && application.studentProfile.languages_spoken.length > 0 && (
+                {application.studentProfile?.languages_spoken && Array.isArray(application.studentProfile.languages_spoken) && application.studentProfile.languages_spoken.length > 0 && (
                   <div className="mt-4">
                     <label className="text-sm font-medium text-gray-500">Langues parlées</label>
                     <div className="flex flex-wrap gap-2 mt-1">
@@ -320,7 +320,7 @@ export default function ApplicationReviewModal({
                   </div>
                 )}
 
-                {application.studentProfile.academic_achievements && (
+                {application.studentProfile?.academic_achievements && (
                   <div className="mt-4">
                     <label className="text-sm font-medium text-gray-500">Réalisations académiques</label>
                     <p className="text-gray-900 text-sm mt-1 leading-relaxed">
@@ -329,7 +329,7 @@ export default function ApplicationReviewModal({
                   </div>
                 )}
 
-                {application.studentProfile.work_experience && (
+                {application.studentProfile?.work_experience && (
                   <div className="mt-4">
                     <label className="text-sm font-medium text-gray-500">Expérience professionnelle</label>
                     <p className="text-gray-900 text-sm mt-1 leading-relaxed">
@@ -348,20 +348,20 @@ export default function ApplicationReviewModal({
                 
                 <div className="space-y-3">
                   <div>
-                    <h4 className="font-semibold text-gray-900">{application.scholarship.title}</h4>
+                    <h4 className="font-semibold text-gray-900">{application.scholarship?.title || 'Titre non disponible'}</h4>
                     <p className="text-green-600 font-medium">
-                      {application.scholarship.amount?.toLocaleString()} {application.scholarship.currency}
+                      {application.scholarship?.amount?.toLocaleString() || 'Montant non spécifié'} {application.scholarship?.currency || ''}
                     </p>
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                     <div>
                       <label className="text-gray-500">Niveau requis</label>
-                      <p className="text-gray-900">{application.scholarship.study_level}</p>
+                      <p className="text-gray-900">{application.scholarship?.study_level || 'Non spécifié'}</p>
                     </div>
                     <div>
                       <label className="text-gray-500">Domaines</label>
-                      <p className="text-gray-900">{application.scholarship.study_fields.join(', ')}</p>
+                      <p className="text-gray-900">{application.scholarship?.study_fields?.join(', ') || 'Non spécifiés'}</p>
                     </div>
                   </div>
                 </div>
@@ -389,14 +389,16 @@ export default function ApplicationReviewModal({
                   <div className="flex justify-between text-sm">
                     <span>Domaine d'étude</span>
                     <span className={`font-medium ${
-                      application.studentProfile.field_of_study && 
+                      application.studentProfile?.field_of_study && 
+                      application.scholarship?.study_fields && Array.isArray(application.scholarship.study_fields) &&
                       application.scholarship.study_fields.some(field => 
-                        field.toLowerCase().includes(application.studentProfile.field_of_study!.toLowerCase())
+                        field.toLowerCase().includes(application.studentProfile!.field_of_study!.toLowerCase())
                       ) ? 'text-green-600' : 'text-red-600'
                     }`}>
-                      {application.studentProfile.field_of_study && 
+                      {application.studentProfile?.field_of_study && 
+                       application.scholarship?.study_fields && Array.isArray(application.scholarship.study_fields) &&
                        application.scholarship.study_fields.some(field => 
-                         field.toLowerCase().includes(application.studentProfile.field_of_study!.toLowerCase())
+                         field.toLowerCase().includes(application.studentProfile!.field_of_study!.toLowerCase())
                        ) ? '✓ Compatible' : '✗ Incompatible'}
                     </span>
                   </div>
@@ -406,7 +408,7 @@ export default function ApplicationReviewModal({
                     <span className="font-medium text-green-600">✓ Compatible</span>
                   </div>
                   
-                  {application.studentProfile.gpa && (
+                  {application.studentProfile?.gpa && (
                     <div className="flex justify-between text-sm">
                       <span>Excellence académique</span>
                       <span className={`font-medium ${
@@ -477,7 +479,7 @@ export default function ApplicationReviewModal({
                       variant="outline"
                       onClick={() => {
                         // Ouvrir la messagerie pour contacter le candidat
-                        window.open(`/messages/new?to=${application.student.email}&subject=Candidature ${application.scholarship.title}`, '_blank')
+                        window.open(`/messages/new?to=${application.student?.email}&subject=Candidature ${application.scholarship?.title}`, '_blank')
                       }}
                       icon={MessageSquare}
                     >
