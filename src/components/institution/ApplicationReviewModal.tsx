@@ -22,6 +22,33 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
+interface SelectedProfile {
+  full_name: string
+  email: string
+  phone?: string | null
+  bio?: string | null
+}
+
+interface SelectedScholarship {
+  title: string
+  amount: number | null
+  currency: string | null
+  study_level: string | null
+  study_fields: string[] | null
+}
+
+interface ApplicationWithRelations {
+  id: string
+  status: string
+  notes?: string | null
+  application_data?: any | null
+  submitted_at: string | null
+  created_at: string
+  student_id: string
+  profiles: SelectedProfile | null
+  scholarships: SelectedScholarship | null
+}
+
 interface ApplicationReviewModalProps {
   applicationId: string | null
   isOpen: boolean
@@ -37,15 +64,15 @@ interface ApplicationDetails {
   submitted_at: string | null
   created_at: string
   scholarship: {
-    title: string
+    title: string | null
     amount: number | null
     currency: string | null
     study_level: string | null
     study_fields: string[] | null
   } | null
   student: {
-    full_name: string
-    email: string
+    full_name: string | null
+    email: string | null
     phone?: string | null
     bio?: string | null
   } | null
@@ -84,7 +111,7 @@ export default function ApplicationReviewModal({
       setLoading(true)
       
       // Charger les détails de la candidature avec toutes les relations
-      const { data: appData, error: appError } = await supabase
+      const { data: appData, error: appError }: { data: ApplicationWithRelations | null, error: any } = await supabase
         .from('applications')
         .select(`
           *,
@@ -95,6 +122,7 @@ export default function ApplicationReviewModal({
         .single()
 
       if (appError) throw appError
+      if (!appData) throw new Error('Application not found')
 
       // Charger le profil étudiant détaillé
       const { data: studentProfile } = await supabase
@@ -105,8 +133,19 @@ export default function ApplicationReviewModal({
 
       setApplication({
         ...appData,
-        student: appData.profiles || null,
-        scholarship: appData.scholarships || null,
+        student: appData.profiles ? {
+          full_name: appData.profiles.full_name || null,
+          email: appData.profiles.email || null,
+          phone: appData.profiles.phone || null,
+          bio: appData.profiles.bio || null
+        } : null,
+        scholarship: appData.scholarships ? {
+          title: appData.scholarships.title || null,
+          amount: appData.scholarships.amount || null,
+          currency: appData.scholarships.currency || null,
+          study_level: appData.scholarships.study_level || null,
+          study_fields: appData.scholarships.study_fields || null
+        } : null,
         studentProfile: studentProfile || {}
       })
       
