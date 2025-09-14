@@ -21,33 +21,7 @@ import {
   MessageSquare
 } from 'lucide-react'
 import toast from 'react-hot-toast'
-
-interface SelectedProfile {
-  full_name: string
-  email: string
-  phone?: string | null
-  bio?: string | null
-}
-
-interface SelectedScholarship {
-  title: string
-  amount: number | null
-  currency: string | null
-  study_level: string | null
-  study_fields: string[] | null
-}
-
-interface ApplicationWithRelations {
-  id: string
-  status: string
-  notes?: string | null
-  application_data?: any | null
-  submitted_at: string | null
-  created_at: string
-  student_id: string
-  profiles: SelectedProfile | null
-  scholarships: SelectedScholarship | null
-}
+import type { Tables } from '@/types/supabase'
 
 interface ApplicationReviewModalProps {
   applicationId: string | null
@@ -58,23 +32,23 @@ interface ApplicationReviewModalProps {
 
 interface ApplicationDetails {
   id: string
-  status: string
+  status: string | null
   notes?: string | null
   application_data?: any | null
   submitted_at: string | null
   created_at: string
+  student: {
+    full_name: string | null
+    email: string | null
+    phone?: string | null
+    bio?: string | null
+  } | null
   scholarship: {
     title: string | null
     amount: number | null
     currency: string | null
     study_level: string | null
     study_fields: string[] | null
-  } | null
-  student: {
-    full_name: string | null
-    email: string | null
-    phone?: string | null
-    bio?: string | null
   } | null
   studentProfile: {
     field_of_study?: string
@@ -110,8 +84,8 @@ export default function ApplicationReviewModal({
     try {
       setLoading(true)
       
-      // Charger les détails de la candidature avec toutes les relations
-      const { data: appData, error: appError }: { data: ApplicationWithRelations | null, error: any } = await supabase
+      // Load application with relations
+      const { data: appData, error: appError } = await supabase
         .from('applications')
         .select(`
           *,
@@ -124,31 +98,38 @@ export default function ApplicationReviewModal({
       if (appError) throw appError
       if (!appData) throw new Error('Application not found')
 
-      // Charger le profil étudiant détaillé
+      // Load detailed student profile
       const { data: studentProfile } = await supabase
         .from('student_profiles')
         .select('*')
         .eq('profile_id', appData.student_id)
         .maybeSingle()
 
-      setApplication({
-        ...appData,
+      // Transform the data to match our interface
+      const transformedApplication: ApplicationDetails = {
+        id: appData.id,
+        status: appData.status,
+        notes: appData.notes,
+        application_data: appData.application_data,
+        submitted_at: appData.submitted_at,
+        created_at: appData.created_at,
         student: appData.profiles ? {
-          full_name: appData.profiles.full_name || null,
-          email: appData.profiles.email || null,
-          phone: appData.profiles.phone || null,
-          bio: appData.profiles.bio || null
+          full_name: (appData.profiles as any)?.full_name || null,
+          email: (appData.profiles as any)?.email || null,
+          phone: (appData.profiles as any)?.phone || null,
+          bio: (appData.profiles as any)?.bio || null
         } : null,
         scholarship: appData.scholarships ? {
-          title: appData.scholarships.title || null,
-          amount: appData.scholarships.amount || null,
-          currency: appData.scholarships.currency || null,
-          study_level: appData.scholarships.study_level || null,
-          study_fields: appData.scholarships.study_fields || null
+          title: (appData.scholarships as any)?.title || null,
+          amount: (appData.scholarships as any)?.amount || null,
+          currency: (appData.scholarships as any)?.currency || null,
+          study_level: (appData.scholarships as any)?.study_level || null,
+          study_fields: (appData.scholarships as any)?.study_fields || null
         } : null,
-        studentProfile: studentProfile || {}
-      })
-      
+        studentProfile: studentProfile || null
+      }
+
+      setApplication(transformedApplication)
       setReviewNotes(appData.notes || '')
       setSelectedStatus(appData.status || 'pending')
     } catch (error) {
@@ -176,8 +157,8 @@ export default function ApplicationReviewModal({
     let score = 0
     let factors = 0
 
-    // Correspondance du domaine d'étude
-    if (application.studentProfile.field_of_study && application.scholarship.study_fields) {
+    // Field match
+    if (application.studentProfile?.field_of_study && application.scholarship?.study_fields) {
       const studentField = application.studentProfile.field_of_study.toLowerCase()
       const hasMatch = application.scholarship.study_fields.some(field => 
         field.toLowerCase().includes(studentField) || studentField.includes(field.toLowerCase())
@@ -186,8 +167,8 @@ export default function ApplicationReviewModal({
       factors++
     }
 
-    // Correspondance du niveau
-    if (application.studentProfile.current_education_level && application.scholarship.study_level) {
+    // Level match
+    if (application.studentProfile?.current_education_level && application.scholarship?.study_level) {
       const levelMapping: Record<string, string[]> = {
         'High School': ['Bachelor'],
         'Bachelor': ['Master'],
@@ -203,8 +184,8 @@ export default function ApplicationReviewModal({
       factors++
     }
 
-    // Excellence académique
-    if (application.studentProfile.gpa) {
+    // GPA excellence
+    if (application.studentProfile?.gpa) {
       if (application.studentProfile.gpa >= 3.8) score += 25
       else if (application.studentProfile.gpa >= 3.5) score += 20
       else if (application.studentProfile.gpa >= 3.2) score += 15
@@ -212,8 +193,8 @@ export default function ApplicationReviewModal({
       factors++
     }
 
-    // Réalisations académiques
-    if (application.studentProfile.academic_achievements) {
+    // Academic achievements
+    if (application.studentProfile?.academic_achievements) {
       const achievements = application.studentProfile.academic_achievements.toLowerCase()
       const highValueKeywords = ['award', 'publication', 'research', 'honor', 'distinction']
       const matchingKeywords = highValueKeywords.filter(keyword => achievements.includes(keyword))
@@ -221,7 +202,7 @@ export default function ApplicationReviewModal({
       factors++
     }
 
-    return factors > 0 ? Math.round(score / factors * 4) : 0 // Normaliser sur 100
+    return factors > 0 ? Math.round(score / factors * 4) : 0
   }
 
   if (!isOpen || !applicationId) return null
@@ -243,7 +224,7 @@ export default function ApplicationReviewModal({
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <Card className="p-8 text-center">
-          <p className="text-red-600">Erreur lors du chargement de la candidature ou données manquantes</p>
+          <p className="text-red-600">Erreur lors du chargement de la candidature</p>
           <Button onClick={onClose} className="mt-4">Fermer</Button>
         </Card>
       </div>
@@ -271,9 +252,9 @@ export default function ApplicationReviewModal({
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Informations du candidat */}
+            {/* Candidate information */}
             <div className="lg:col-span-2 space-y-6">
-              {/* Profil candidat */}
+              {/* Candidate profile */}
               <Card className="p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <User className="w-5 h-5 text-blue-600" />
@@ -315,7 +296,7 @@ export default function ApplicationReviewModal({
                 </div>
               </Card>
 
-              {/* Informations académiques */}
+              {/* Academic information */}
               <Card className="p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <GraduationCap className="w-5 h-5 text-green-600" />
@@ -378,7 +359,7 @@ export default function ApplicationReviewModal({
                 )}
               </Card>
 
-              {/* Informations sur la bourse */}
+              {/* Scholarship information */}
               <Card className="p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <Award className="w-5 h-5 text-yellow-600" />
@@ -407,9 +388,9 @@ export default function ApplicationReviewModal({
               </Card>
             </div>
 
-            {/* Panel de décision */}
+            {/* Decision panel */}
             <div className="space-y-6">
-              {/* Score de correspondance */}
+              {/* Match score */}
               <Card className="p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">Score de correspondance</h3>
                 
@@ -462,7 +443,7 @@ export default function ApplicationReviewModal({
                 </div>
               </Card>
 
-              {/* Actions de révision */}
+              {/* Review actions */}
               <Card className="p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">Décision</h3>
                 
@@ -517,8 +498,7 @@ export default function ApplicationReviewModal({
                     <Button
                       variant="outline"
                       onClick={() => {
-                        // Ouvrir la messagerie pour contacter le candidat
-                        window.open(`/messages/new?to=${application.student?.email}&subject=Candidature ${application.scholarship?.title}`, '_blank')
+                        window.open(`mailto:${application.student?.email}?subject=Candidature ${application.scholarship?.title}`, '_blank')
                       }}
                       icon={MessageSquare}
                     >
@@ -528,7 +508,7 @@ export default function ApplicationReviewModal({
                 </div>
               </Card>
 
-              {/* Informations sur la candidature */}
+              {/* Application details */}
               <Card className="p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">Détails de la candidature</h3>
                 

@@ -219,9 +219,7 @@ export default function InstitutionDashboard() {
 
       if (error) throw error
 
-      // Cast the applications to the correct type
-      const typedApplications = (applications || []) as ApplicationWithRelationsForDashboard[]
-      setInstitutionApplications(typedApplications)
+      setInstitutionApplications(applications as ApplicationWithRelationsForDashboard[] || [])
       
       // Calculer les statistiques des candidatures
       const totalApplications = applications?.length || 0
@@ -551,36 +549,36 @@ export default function InstitutionDashboard() {
   // Colonnes pour le tableau des candidatures
   const applicationColumns = [
     {
-      key: 'profiles' as keyof Application,
+      key: 'profiles' as keyof ApplicationWithRelationsForDashboard,
       label: 'Candidat',
-      render: (value: any, row: Application) => (
+      render: (value: any, row: ApplicationWithRelationsForDashboard) => (
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
             <span className="text-blue-600 font-medium text-sm">
-              {value?.full_name?.charAt(0) || 'U'}
+              {(value as any)?.full_name?.charAt(0) || 'U'}
             </span>
           </div>
           <div>
-            <div className="font-medium text-gray-900">{value?.full_name || 'Nom inconnu'}</div>
-            <div className="text-sm text-gray-500">{value?.email}</div>
+            <div className="font-medium text-gray-900">{(value as any)?.full_name || 'Nom inconnu'}</div>
+            <div className="text-sm text-gray-500">{(value as any)?.email}</div>
           </div>
         </div>
       )
     },
     {
-      key: 'scholarships' as keyof Application,
+      key: 'scholarships' as keyof ApplicationWithRelationsForDashboard,
       label: 'Bourse',
       render: (value: any) => (
         <div>
-          <div className="font-medium text-gray-900">{value?.title}</div>
+          <div className="font-medium text-gray-900">{(value as any)?.title}</div>
           <div className="text-sm text-green-600">
-            {value?.amount ? `${value.amount.toLocaleString()}€` : 'Montant non spécifié'}
+            {(value as any)?.amount ? `${(value as any).amount.toLocaleString()}€` : 'Montant non spécifié'}
           </div>
         </div>
       )
     },
     {
-      key: 'status' as keyof Application,
+      key: 'status' as keyof ApplicationWithRelationsForDashboard,
       label: 'Statut',
       render: (value: string | null) => {
         const statusConfig = {
@@ -604,7 +602,7 @@ export default function InstitutionDashboard() {
       }
     },
     {
-      key: 'created_at' as keyof Application,
+      key: 'created_at' as keyof ApplicationWithRelationsForDashboard,
       label: 'Date de candidature',
       sortable: true,
       render: (value: string | null) => (
@@ -612,11 +610,11 @@ export default function InstitutionDashboard() {
       )
     },
     {
-      key: 'actions' as keyof Application,
+      key: 'actions' as keyof ApplicationWithRelationsForDashboard,
       label: 'Actions',
-      render: (_, row: Application) => (
+      render: (_, row: ApplicationWithRelationsForDashboard) => (
         <div className="flex items-center space-x-2">
-          {row.status === 'pending' && (
+          {(row.status === 'pending' || row.status === 'under_review') && (
             <>
               <Button
                 size="sm"
@@ -733,11 +731,6 @@ export default function InstitutionDashboard() {
           <Link to={`/scholarship/${row.id}`}>
             <Button size="sm" variant="ghost">
               <Eye className="w-4 h-4" />
-            </Button>
-          </Link>
-          <Link to={`/scholarship/${row.id}/edit`}>
-            <Button size="sm" variant="ghost">
-              <Edit className="w-4 h-4" />
             </Button>
           </Link>
           <Button

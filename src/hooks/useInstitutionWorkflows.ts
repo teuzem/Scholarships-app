@@ -1,10 +1,21 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase, invokeEdgeFunction } from '@/lib/supabase'
 import { useAuth } from './useAuth'
+import type { Tables } from '@/types/supabase'
 import toast from 'react-hot-toast'
 
-// Type for application with relations used in notifications
-type ApplicationWithRelationsForNotification = Tables<'applications'> & {
+// Types for applications with relations
+interface ApplicationWithRelations {
+  id: string
+  status: string | null
+  notes: string | null
+  student_id: string
+  scholarship_id: string
+  created_at: string
+  updated_at: string | null
+  reviewed_at: string | null
+  submitted_at: string | null
+  application_data: any | null
   scholarships: {
     title: string
   } | null
@@ -104,8 +115,8 @@ export function useManageApplications() {
       status: string
       notes?: string 
     }) => {
-      // First, update the application
-      const { error: updateError } = await supabase
+      // Update the application
+      const { data: updatedApp, error: updateError } = await supabase
         .from('applications')
         .update({
           status,
@@ -114,11 +125,13 @@ export function useManageApplications() {
           updated_at: new Date().toISOString()
         })
         .eq('id', applicationId)
+        .select()
+        .single()
 
       if (updateError) throw updateError
 
-      // Then, fetch the updated application with relations
-      const { data, error } = await supabase
+      // Fetch the application with relations for notification
+      const { data: appWithRelations, error: relationError } = await supabase
         .from('applications')
         .select(`
           *,
@@ -128,26 +141,27 @@ export function useManageApplications() {
         .eq('id', applicationId)
         .single()
 
-      if (error) throw error
-
-      const typedData = data as ApplicationWithRelationsForNotification
+      if (relationError) throw relationError
 
       // Créer une notification pour l'étudiant
-      await supabase.from('notifications').insert({
-        user_id: typedData.student_id,
-        title: `Mise à jour de votre candidature`,
-        message: `Votre candidature pour "${typedData.scholarships?.title}" a été ${
-          status === 'accepted' ? 'acceptée' : 
-          status === 'rejected' ? 'refusée' : 
-          'mise à jour'
-        }.`,
-        type: 'application_status',
-        priority: status === 'accepted' ? 'high' : 'medium',
-        related_application_id: applicationId,
-        related_scholarship_id: typedData.scholarship_id
-      })
+      if (appWithRelations) {
+        const typedData = appWithRelations as ApplicationWithRelations
+        await supabase.from('notifications').insert({
+          user_id: typedData.student_id,
+          title: `Mise à jour de votre candidature`,
+          message: `Votre candidature pour "${typedData.scholarships?.title || 'cette bourse'}" a été ${
+            status === 'accepted' ? 'acceptée' : 
+            status === 'rejected' ? 'refusée' : 
+            'mise à jour'
+          }.`,
+          type: 'application_status',
+          priority: status === 'accepted' ? 'high' : 'medium',
+          related_application_id: applicationId,
+          related_scholarship_id: typedData.scholarship_id
+        })
+      }
 
-      return typedData
+      return updatedApp
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['applications'] })
